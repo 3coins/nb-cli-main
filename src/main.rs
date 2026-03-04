@@ -1,5 +1,6 @@
 mod notebook;
 mod commands;
+mod execution;
 
 use clap::{Parser, Subcommand};
 use std::process;
@@ -37,6 +38,8 @@ enum NotebookCommands {
     Create(commands::create_notebook::CreateArgs),
     /// Read and extract notebook content
     Read(commands::read::ReadArgs),
+    /// Execute all cells in a notebook
+    Execute(commands::execute_notebook::ExecuteNotebookArgs),
 }
 
 #[derive(Subcommand)]
@@ -47,6 +50,8 @@ enum CellCommands {
     Update(commands::update_cell::UpdateCellArgs),
     /// Delete cells from a notebook
     Delete(commands::delete_cell::DeleteCellArgs),
+    /// Execute a single cell
+    Execute(commands::execute_cell::ExecuteCellArgs),
 }
 
 #[derive(Subcommand)]
@@ -62,11 +67,13 @@ fn main() {
         Commands::Notebook { command } => match command {
             NotebookCommands::Create(args) => commands::create_notebook::execute(args),
             NotebookCommands::Read(args) => commands::read::execute(args),
+            NotebookCommands::Execute(args) => commands::execute_notebook::execute(args),
         },
         Commands::Cell { command } => match command {
             CellCommands::Add(args) => commands::add_cell::execute(args),
             CellCommands::Update(args) => commands::update_cell::execute(args),
             CellCommands::Delete(args) => commands::delete_cell::execute(args),
+            CellCommands::Execute(args) => commands::execute_cell::execute(args),
         },
         Commands::Output { command } => match command {
             OutputCommands::Clear(args) => commands::clear_outputs::execute(args),

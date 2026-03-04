@@ -94,19 +94,27 @@ jupyter-cli notebook read notebook.ipynb
   "cell_count": 7,
   "code_cells": 4,
   "markdown_cells": 3,
+  "raw_cells": 0,
   "kernel": "python3",
   "cells": [
     {
       "index": 0,
       "id": "intro-cell",
-      "type": "markdown",
-      "preview": "# Data Analysis Example..."
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "# Data Analysis Example\n\nThis notebook demonstrates..."
+      ]
     },
     {
       "index": 1,
       "id": "imports-cell",
-      "type": "code",
-      "preview": "import pandas as pd...",
+      "cell_type": "code",
+      "execution_count": 1,
+      "metadata": {},
+      "source": [
+        "import pandas as pd\nimport numpy as np"
+      ],
       "executed": true
     }
   ]
@@ -134,15 +142,24 @@ Negative indexing (last cell):
 jupyter-cli notebook read notebook.ipynb -c -1
 ```
 
-### Read Cell Output
+### Read Cells with Outputs
 
-View the execution output of a code cell:
+Include execution outputs along with cell content:
 
 ```bash
-jupyter-cli notebook read notebook.ipynb -c 3 --with-output
+# View a specific cell with its outputs
+jupyter-cli notebook read notebook.ipynb -c 3 --with-outputs
 # or use short form
 jupyter-cli notebook read notebook.ipynb -c 3 -o
+
+# View entire notebook with all outputs
+jupyter-cli notebook read notebook.ipynb --with-outputs
+
+# View only code cells with their outputs
+jupyter-cli notebook read notebook.ipynb --only-code --with-outputs
 ```
+
+This shows both the cell source code and any execution outputs together.
 
 ### Extract All Code Cells
 
@@ -161,10 +178,13 @@ jupyter-cli notebook read notebook.ipynb --code
     {
       "index": 1,
       "id": "imports-cell",
-      "source": "import pandas as pd\nimport numpy as np",
-      "execution_count": 1
-    },
-    ...
+      "cell_type": "code",
+      "execution_count": 1,
+      "metadata": {},
+      "source": [
+        "import pandas as pd\nimport numpy as np"
+      ]
+    }
   ]
 }
 ```
@@ -177,14 +197,6 @@ Get all documentation from the notebook:
 jupyter-cli notebook read notebook.ipynb --only-markdown
 # backward compatible alias
 jupyter-cli notebook read notebook.ipynb --markdown
-```
-
-### Get All Outputs
-
-Extract all execution outputs:
-
-```bash
-jupyter-cli notebook read notebook.ipynb --all-outputs
 ```
 
 ### Add a Cell
@@ -272,6 +284,8 @@ jupyter-cli notebook read notebook.ipynb -c 0 -f text
 jupyter-cli cell add notebook.ipynb --source "x=1" -f text
 ```
 
+**JSON Format:** All JSON output follows the [nbformat specification](https://nbformat.readthedocs.io/), preserving all cell fields (`cell_type`, `source`, `metadata`, `execution_count`, `outputs`, etc.). This ensures compatibility with other Jupyter tools and APIs. An additional `index` field is included for convenience when working with positional references.
+
 ## Command Reference
 
 ### Notebook Commands
@@ -336,8 +350,8 @@ jupyter-cli notebook read notebook.ipynb -i "data-processing"
 
 ### Debug and Modify
 ```bash
-# See what a cell produced
-jupyter-cli notebook read notebook.ipynb -c 5 -o
+# See what a cell produced (includes both source and outputs)
+jupyter-cli notebook read notebook.ipynb -c 5 --with-outputs
 
 # Update problematic cell
 jupyter-cli cell update notebook.ipynb -c 5 --source "fixed code"

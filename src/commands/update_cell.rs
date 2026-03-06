@@ -112,9 +112,7 @@ async fn execute_with_realtime(
     use crate::execution::remote::{session_check, ydoc_notebook_ops};
 
     let (server_url, token) = match mode {
-        crate::execution::types::ExecutionMode::Remote { server_url, token } => {
-            (server_url, token)
-        }
+        crate::execution::types::ExecutionMode::Remote { server_url, token } => (server_url, token),
         _ => bail!("Expected remote execution mode"),
     };
 

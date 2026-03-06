@@ -46,8 +46,7 @@ pub fn execute(args: StatusArgs) -> Result<()> {
 
                 println!("\n🔍 Validating connection...");
                 let result = runtime.block_on(async {
-                    let client =
-                        JupyterClient::new(conn.server_url.clone(), conn.token.clone())?;
+                    let client = JupyterClient::new(conn.server_url.clone(), conn.token.clone())?;
                     client.test_connection().await
                 });
 

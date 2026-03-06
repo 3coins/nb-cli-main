@@ -116,10 +116,8 @@ async fn execute_async(args: ExecuteCellArgs) -> Result<()> {
     }
 
     // Determine execution mode
-    let mode = crate::commands::common::resolve_execution_mode(
-        args.server.clone(),
-        args.token.clone(),
-    )?;
+    let mode =
+        crate::commands::common::resolve_execution_mode(args.server.clone(), args.token.clone())?;
 
     // Get kernel from notebook metadata if not specified
     let notebook_kernel = notebook

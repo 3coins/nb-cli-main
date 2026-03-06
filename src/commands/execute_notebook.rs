@@ -107,10 +107,8 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     }
 
     // Determine execution mode
-    let mode = crate::commands::common::resolve_execution_mode(
-        args.server.clone(),
-        args.token.clone(),
-    )?;
+    let mode =
+        crate::commands::common::resolve_execution_mode(args.server.clone(), args.token.clone())?;
 
     // Get kernel from notebook metadata if not specified
     let notebook_kernel = notebook
@@ -228,8 +226,8 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
             write_notebook_atomic(&args.file, &notebook).context("Failed to write notebook")?;
         }
         ExecutionMode::Remote {
-            server_url: ref server_url,
-            token: ref token,
+            ref server_url,
+            ref token,
         } => {
             // Sync outputs to JupyterLab via Y.js
             let notebook_path = notebook_filename.context("No notebook filename for Y.js sync")?;

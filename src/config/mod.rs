@@ -21,13 +21,13 @@ pub struct Config {
 }
 
 impl Config {
-    /// Get path to config file: ~/.jupyter/cli.json
+    /// Get path to config file: ./.jupyter/cli.json (relative to current directory)
     pub fn config_path() -> Result<PathBuf> {
-        let home = dirs::home_dir().context("Could not determine home directory")?;
-        Ok(home.join(".jupyter").join("cli.json"))
+        let cwd = std::env::current_dir().context("Could not determine current directory")?;
+        Ok(cwd.join(".jupyter").join("cli.json"))
     }
 
-    /// Load config from ~/.jupyter/cli.json
+    /// Load config from ./.jupyter/cli.json
     pub fn load() -> Result<Self> {
         let path = Self::config_path()?;
 
@@ -42,7 +42,7 @@ impl Config {
         Ok(config)
     }
 
-    /// Save config to ~/.jupyter/cli.json
+    /// Save config to ./.jupyter/cli.json
     pub fn save(&self) -> Result<PathBuf> {
         let path = Self::config_path()?;
 

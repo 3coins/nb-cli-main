@@ -106,7 +106,7 @@ async function executeAddCell(path: string, options: AddCellOptions): Promise<vo
 }
 
 async function executeUpdateCell(path: string, options: UpdateCellOptions): Promise<void> {
-  if (!options.cellIndex && !options.cell) {
+  if (options.cellIndex === undefined && !options.cell) {
     throw new Error('Either --cell-index or --cell must be specified');
   }
 
@@ -147,7 +147,7 @@ async function executeUpdateCell(path: string, options: UpdateCellOptions): Prom
 }
 
 async function executeDeleteCell(path: string, options: DeleteCellOptions): Promise<void> {
-  if (!options.cellIndex && !options.cell) {
+  if (options.cellIndex === undefined && !options.cell) {
     throw new Error('Either --cell-index or --cell must be specified');
   }
 

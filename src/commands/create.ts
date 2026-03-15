@@ -8,9 +8,9 @@ import { OutputFormat, Template } from '../notebook/types.js';
 interface CreateOptions {
   kernel: string;
   language: string;
-  template: Template;
+  template: string;
   force: boolean;
-  format: OutputFormat;
+  format: string;
 }
 
 export function createCommand(): Command {
@@ -48,6 +48,7 @@ async function executeCreate(file: string, options: CreateOptions): Promise<void
 
   // Parse template
   const template = parseTemplate(options.template);
+  const format = parseFormat(options.format);
 
   // Create notebook
   const notebook = createNotebook(options.kernel, options.language, template);
@@ -63,7 +64,7 @@ async function executeCreate(file: string, options: CreateOptions): Promise<void
     cell_count: notebook.cells.length,
   };
 
-  if (options.format === OutputFormat.JSON) {
+  if (format === OutputFormat.JSON) {
     console.log(JSON.stringify(result, null, 2));
   } else {
     console.log(`Created notebook: ${result.file}`);
@@ -84,5 +85,17 @@ function parseTemplate(templateStr: string): Template {
       return Template.MARKDOWN;
     default:
       throw new Error(`Unknown template: ${templateStr}. Use empty, basic, or markdown.`);
+  }
+}
+
+function parseFormat(formatStr: string): OutputFormat {
+  const lower = formatStr.toLowerCase();
+  switch (lower) {
+    case 'json':
+      return OutputFormat.JSON;
+    case 'text':
+      return OutputFormat.TEXT;
+    default:
+      throw new Error(`Unknown format: ${formatStr}. Use json or text.`);
   }
 }

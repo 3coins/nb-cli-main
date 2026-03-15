@@ -1,5 +1,19 @@
-import { validateNotebookContent } from '@jupyterlab/nbformat';
 import type { Notebook } from './types.js';
+
+/**
+ * Validate basic notebook structure
+ */
+function validateNotebook(notebook: any): void {
+  if (!notebook.nbformat || notebook.nbformat !== 4) {
+    throw new Error('Only nbformat v4 notebooks are supported');
+  }
+  if (!Array.isArray(notebook.cells)) {
+    throw new Error('Notebook must have a cells array');
+  }
+  if (!notebook.metadata) {
+    throw new Error('Notebook must have metadata');
+  }
+}
 
 /**
  * Read a Jupyter notebook from a file
@@ -11,10 +25,7 @@ export async function readNotebook(path: string): Promise<Notebook> {
     const notebook = JSON.parse(content);
 
     // Validate notebook format
-    const errors = validateNotebookContent(notebook);
-    if (errors.length > 0) {
-      throw new Error(`Invalid notebook format: ${errors.join(', ')}`);
-    }
+    validateNotebook(notebook);
 
     return notebook as Notebook;
   } catch (error) {
@@ -34,10 +45,7 @@ export async function readNotebook(path: string): Promise<Notebook> {
 export async function writeNotebook(path: string, notebook: Notebook): Promise<void> {
   try {
     // Validate notebook before writing
-    const errors = validateNotebookContent(notebook);
-    if (errors.length > 0) {
-      throw new Error(`Invalid notebook format: ${errors.join(', ')}`);
-    }
+    validateNotebook(notebook);
 
     const content = JSON.stringify(notebook, null, 2) + '\n';
     await Bun.write(path, content);

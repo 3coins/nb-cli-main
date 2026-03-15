@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { ICell, ICodeCell, IMarkdownCell, IRawCell } from '@jupyterlab/nbformat';
-import type { Notebook, CellReference, CellType, Template } from './types.js';
+import type { Notebook, CellReference } from './types.js';
+import { CellType, Template } from './types.js';
 
 /**
  * Create a new notebook with specified template

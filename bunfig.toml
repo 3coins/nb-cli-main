@@ -1,0 +1,7 @@
+[install]
+# Use npm registry for packages
+registry = "https://registry.npmjs.org/"
+
+[test]
+# Test configuration
+preload = []

@@ -1,0 +1,48 @@
+{
+  "name": "@jupyter-ai-contrib/nb-cli",
+  "version": "0.0.1",
+  "description": "A command-line tool for reading, writing, and executing Jupyter notebooks",
+  "type": "module",
+  "bin": {
+    "nb": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun --format esm --sourcemap=external",
+    "dev": "bun run src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "jupyter",
+    "notebooks",
+    "cli",
+    "ai"
+  ],
+  "author": "Project Jupyter <jupyter@googlegroups.com>",
+  "license": "BSD-3-Clause",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jupyter-ai-contrib/nb-cli.git"
+  },
+  "homepage": "https://github.com/jupyter-ai-contrib/nb-cli",
+  "dependencies": {
+    "@jupyterlab/nbformat": "^4.2.5",
+    "@jupyterlab/services": "^7.2.5",
+    "@jupyter/ydoc": "^3.0.2",
+    "commander": "^12.1.0",
+    "ink": "^5.0.1",
+    "react": "^18.3.1",
+    "uuid": "^10.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.15",
+    "@types/react": "^18.3.3",
+    "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

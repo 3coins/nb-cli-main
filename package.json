@@ -4,10 +4,10 @@
   "description": "A command-line tool for reading, writing, and executing Jupyter notebooks",
   "type": "module",
   "bin": {
-    "nb": "./dist/index.js"
+    "nb": "./src/index.ts"
   },
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target bun --format esm --sourcemap=external",
+    "build": "bun run build.ts",
     "dev": "bun run src/index.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"

@@ -9,6 +9,7 @@ import { statusCommand } from './commands/status.js';
 import { disconnectCommand } from './commands/disconnect.js';
 import { executeCommand } from './commands/execute.js';
 import { selfCommand } from './commands/self.js';
+import { viewCommand } from './commands/view.js';
 
 export function createCLI(): Command {
   const program = new Command();
@@ -30,6 +31,7 @@ export function createCLI(): Command {
   program.addCommand(statusCommand());
   program.addCommand(disconnectCommand());
   program.addCommand(selfCommand());
+  program.addCommand(viewCommand());
 
   return program;
 }

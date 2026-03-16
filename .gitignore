@@ -33,6 +33,8 @@ tests/.test-venv
 
 # Node.js / Bun
 node_modules/
+js/node_modules/
 dist/
+js/dist/
 *.log
 .env

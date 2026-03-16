@@ -5,6 +5,8 @@ A fast, programmatic command-line interface for working with Jupyter notebooks. 
 [![BSD-3-Clause License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org)
 
+> **Note**: This README documents the Rust implementation. For the TypeScript/Bun implementation, see [`js/README.md`](js/README.md).
+
 ## Installation
 
 ### Quick Install (macOS Apple Silicon only)
@@ -166,6 +168,7 @@ nb disconnect
 |---------|---------|
 | `nb create <path>` | Create a new notebook |
 | `nb read <path>` | Read notebook cells and metadata |
+| `nb view <path>` | Interactive terminal viewer with syntax highlighting |
 | `nb execute <path>` | Execute cells in notebook |
 | `nb search <path> <pattern>` | Search text and errors in notebook cells |
 | `nb cell add <path> --source <code>` | Add a new cell |
@@ -196,6 +199,32 @@ Control output format for better integration with your workflow:
 ```bash
 nb read notebook.ipynb -f text
 ```
+
+### Interactive Viewer
+
+View notebooks interactively in your terminal with live reload. Built with React (ink) for a smooth terminal UI experience:
+
+```bash
+nb view notebook.ipynb
+nb view notebook.ipynb --theme light  # Use light color scheme
+```
+
+**Features:**
+- Split-pane layout: cell list (left) and detail view (right)
+- Cell navigation with vim-style or arrow keys
+- Auto-reload on file changes (manual reload with 'r')
+- View cell outputs and execution counts
+- Execution status indicators (✓ for executed, ○ for not executed)
+- Cell type indicators (⚡ for code, ▪ for markdown, ○ for raw)
+- Clean, readable terminal output using ink's native rendering
+
+**Controls:**
+- `j` or `↓`: Next cell
+- `k` or `↑`: Previous cell
+- `g` / `G`: Jump to first/last cell
+- `r`: Reload notebook
+- `PageDown` / `PageUp`: Skip 5 cells
+- `q` or `Esc`: Quit
 
 ### Multi-line Code
 

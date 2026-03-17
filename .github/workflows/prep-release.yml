@@ -19,7 +19,7 @@ jobs:
     permissions:
       contents: write
     outputs:
-      tag: ${{ steps.create_tag.outputs.tag }}
+      tag: ${{ steps.check_tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,7 +30,21 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          TAG="v${{ inputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag $TAG already exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Tag $TAG does not exist"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
       - name: Update version in Cargo.toml
+        if: steps.check_tag.outputs.exists == 'false'
         run: |
           sed -i.bak 's/^version = ".*"/version = "${{ inputs.version }}"/' Cargo.toml
           rm Cargo.toml.bak
@@ -40,12 +54,12 @@ jobs:
 
       - name: Create and push tag
         id: create_tag
+        if: steps.check_tag.outputs.exists == 'false'
         run: |
           TAG="v${{ inputs.version }}"
           echo "Creating tag: $TAG"
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
 
   build:
     name: Build ${{ matrix.target }}
@@ -121,8 +135,12 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Strip binary (Linux/macOS)
-        if: matrix.os != 'windows-latest'
+      - name: Strip binary (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: aarch64-linux-gnu-strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+
+      - name: Strip binary (other platforms)
+        if: matrix.os != 'windows-latest' && matrix.target != 'aarch64-unknown-linux-gnu'
         run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
 
       - name: Upload artifact

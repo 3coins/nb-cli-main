@@ -48,7 +48,8 @@ jobs:
         run: |
           sed -i.bak 's/^version = ".*"/version = "${{ inputs.version }}"/' Cargo.toml
           rm Cargo.toml.bak
-          git add Cargo.toml
+          cargo update -p nb-cli
+          git add Cargo.toml Cargo.lock
           git commit -m "Bump version to ${{ inputs.version }}"
           git push
 

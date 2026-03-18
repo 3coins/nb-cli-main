@@ -22,6 +22,14 @@ pub struct DeleteCellArgs {
     #[arg(short = 'r', long = "range", value_name = "START:END", conflicts_with_all = ["cell", "cell_index"])]
     pub range: Option<String>,
 
+    /// Jupyter server URL (for real-time updates if notebook is open)
+    #[arg(long)]
+    pub server: Option<String>,
+
+    /// Authentication token for Jupyter server
+    #[arg(long)]
+    pub token: Option<String>,
+
     /// Output in JSON format instead of text
     #[arg(long)]
     pub json: bool,
@@ -35,6 +43,109 @@ struct DeleteCellResult {
 }
 
 pub fn execute(args: DeleteCellArgs) -> Result<()> {
+    // Check if we should use real-time Y.js updates by resolving execution mode
+    use crate::execution::types::ExecutionMode;
+    let mode = common::resolve_execution_mode(args.server.clone(), args.token.clone())?;
+    let use_realtime = matches!(mode, ExecutionMode::Remote { .. });
+
+    if use_realtime {
+        // Create Tokio runtime for async operations
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        return runtime.block_on(execute_with_realtime(args, mode));
+    }
+
+    // Fallback to file-based updates
+    execute_file_based(args)
+}
+
+async fn execute_with_realtime(
+    args: DeleteCellArgs,
+    mode: crate::execution::types::ExecutionMode,
+) -> Result<()> {
+    use crate::execution::remote::ydoc_notebook_ops;
+
+    let (server_url, token) = match mode {
+        crate::execution::types::ExecutionMode::Remote { server_url, token } => (server_url, token),
+        _ => bail!("Expected remote execution mode"),
+    };
+
+    // Extract notebook filename for Y.js connection
+    let notebook_filename = std::path::Path::new(&args.file)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .context("Invalid notebook path")?;
+
+    // Read notebook to calculate which cells to delete
+    let notebook = notebook::read_notebook(&args.file).context("Failed to read notebook")?;
+
+    // Collect indices to delete
+    let mut indices_to_delete: HashSet<usize> = HashSet::new();
+
+    if !args.cell.is_empty() {
+        // Delete by IDs
+        for id in &args.cell {
+            let (index, _) = common::find_cell_by_id(&notebook.cells, id)?;
+            indices_to_delete.insert(index);
+        }
+    } else if !args.cell_index.is_empty() {
+        // Delete by indices
+        for idx in &args.cell_index {
+            let normalized = common::normalize_index(*idx, notebook.cells.len())?;
+            indices_to_delete.insert(normalized);
+        }
+    } else if let Some(ref range_str) = args.range {
+        // Delete by range
+        let (start, end) = parse_range(range_str, notebook.cells.len())?;
+        for i in start..end {
+            indices_to_delete.insert(i);
+        }
+    } else {
+        bail!("Must specify --cell, --cell-index, or --range");
+    }
+
+    // Validate we're not deleting all cells
+    if indices_to_delete.len() >= notebook.cells.len() {
+        bail!("Cannot delete all cells from notebook (must keep at least 1 cell)");
+    }
+
+    // Sort indices in descending order (delete from end to avoid index shifting)
+    let mut sorted_indices: Vec<usize> = indices_to_delete.into_iter().collect();
+    sorted_indices.sort_by(|a, b| b.cmp(a)); // Sort in reverse order
+
+    let cells_deleted = sorted_indices.len();
+    let remaining_cells = notebook.cells.len() - cells_deleted;
+
+    // Delete cells via Y.js (don't write to file - let JupyterLab handle persistence)
+    ydoc_notebook_ops::ydoc_delete_cells(
+        &server_url,
+        &token,
+        notebook_filename,
+        &sorted_indices,
+    )
+    .await
+    .context("Error deleting cells")?;
+
+    // Output result
+    let result = DeleteCellResult {
+        file: args.file.clone(),
+        cells_deleted,
+        remaining_cells,
+    };
+
+    let format = if args.json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
+    output_result(&result, &format)?;
+
+    Ok(())
+}
+
+fn execute_file_based(args: DeleteCellArgs) -> Result<()> {
     // Read notebook
     let mut notebook = notebook::read_notebook(&args.file).context("Failed to read notebook")?;
 

@@ -35,8 +35,7 @@ impl YDocClient {
     pub async fn connect(server_url: String, token: String, notebook_path: String) -> Result<Self> {
         // Step 1: Get file ID from FileID API
         let file_id = Self::get_file_id(&server_url, &token, &notebook_path)
-            .await
-            .context("Failed to get file ID from FileID API")?;
+            .await?;
 
         // Step 2: Connect to room WebSocket
         let ws_url = Self::build_room_ws_url(&server_url, &file_id, &token)?;
@@ -77,7 +76,17 @@ impl YDocClient {
             .header("Authorization", format!("token {}", token))
             .send()
             .await
-            .context("Failed to call FileID API")?;
+            .map_err(|e| {
+                if e.is_connect() {
+                    anyhow::anyhow!(
+                        "nb has been configured for remote mode, but no server is running at {}.\n\
+                         To disable remote mode, run `nb disconnect` or make sure the server is running.",
+                        server_url
+                    )
+                } else {
+                    anyhow::anyhow!("Failed to call FileID API: {}", e)
+                }
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();

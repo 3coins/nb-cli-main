@@ -182,7 +182,7 @@ async fn execute_with_realtime(
         insert_index,
     )
     .await
-    .context("Failed to add cell via Y.js")?;
+    .context("Error adding cell")?;
 
     // Output result
     let cell_type_str = match args.cell_type {

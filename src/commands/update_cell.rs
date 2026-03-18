@@ -162,7 +162,7 @@ async fn execute_with_realtime(
         append_source.as_deref(),
     )
     .await
-    .context("Failed to update cell via Y.js")?;
+    .context("Error updating cell")?;
 
     // Output result
     let result = UpdateCellResult {

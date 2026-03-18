@@ -20,8 +20,7 @@ pub async fn ydoc_add_cell(
         token.to_string(),
         notebook_path.to_string(),
     )
-    .await
-    .context("Failed to connect to Y.js document")?;
+    .await?;
 
     // Add the cell to the Y.js document
     add_cell_to_ydoc(ydoc_client.get_doc(), cell, index)
@@ -138,6 +137,47 @@ fn source_to_string(source: &[String]) -> String {
     source.join("")
 }
 
+/// Delete cells from the notebook via Y.js
+pub async fn ydoc_delete_cells(
+    server_url: &str,
+    token: &str,
+    notebook_path: &str,
+    indices: &[usize],
+) -> Result<()> {
+    // Connect to Y.js document
+    let mut ydoc_client = YDocClient::connect(
+        server_url.to_string(),
+        token.to_string(),
+        notebook_path.to_string(),
+    )
+    .await?;
+
+    // Delete cells from the Y.js document (in reverse order to maintain indices)
+    delete_cells_from_ydoc(ydoc_client.get_doc(), indices)
+        .context("Failed to delete cells from Y.js document")?;
+
+    // Sync changes
+    ydoc_client.sync().await.context("Failed to sync changes")?;
+
+    // Close connection
+    ydoc_client.close().await?;
+
+    Ok(())
+}
+
+/// Delete cells from the Y.js document (expects indices in descending order)
+fn delete_cells_from_ydoc(doc: &yrs::Doc, indices: &[usize]) -> Result<()> {
+    let cells_array = doc.get_or_insert_array("cells");
+    let mut txn = doc.transact_mut();
+
+    // Delete cells in reverse order to avoid index shifting issues
+    for &index in indices {
+        cells_array.remove(&mut txn, index as u32);
+    }
+
+    Ok(())
+}
+
 /// Update an existing cell in the notebook via Y.js
 pub async fn ydoc_update_cell(
     server_url: &str,
@@ -153,8 +193,7 @@ pub async fn ydoc_update_cell(
         token.to_string(),
         notebook_path.to_string(),
     )
-    .await
-    .context("Failed to connect to Y.js document")?;
+    .await?;
 
     // Update the cell in the Y.js document
     update_cell_source_in_ydoc(ydoc_client.get_doc(), cell_index, new_source, append_source)

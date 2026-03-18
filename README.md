@@ -151,7 +151,7 @@ nb status
 nb disconnect
 ```
 
-**How it works**: When connected, the CLI detects if a notebook is open in JupyterLab and uses Y.js for instant sync. If the notebook isn't open on the server, operations fall back to file-based mode.
+**How it works**: When connected, the CLI always uses Y.js for real-time collaborative editing. Changes sync instantly if the notebook is open in JupyterLab, or will appear when you open it later.
 
 ### Remote Mode Examples
 

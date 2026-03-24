@@ -6,7 +6,7 @@ A fast, command-line interface for working with Jupyter notebooks. Designed for 
 
 The default output format uses line-oriented sentinels with JSON metadata, specifically designed for AI agents:
 
-```markdown
+````markdown
 @@notebook {"format":"ai-notebook","metadata":{"kernelspec":{...}}}
 
 @@cell {"index":0,"id":"cell-id","cell_type":"code","execution_count":1}
@@ -17,7 +17,7 @@ import pandas as pd
 ```text
 Hello, world!
 ```
-```
+````
 
 **Key Features:**
 - **Line-oriented sentinels** (`@@notebook`, `@@cell`, `@@output`) for deterministic parsing

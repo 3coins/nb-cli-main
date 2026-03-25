@@ -1,6 +1,7 @@
 /// Helper module for test utilities
+use anyhow::{Context, Result};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
@@ -160,4 +161,40 @@ pub fn setup_venv_environment() -> Option<String> {
     let new_path = format!("{}:{}", bin_path.display(), current_path);
 
     Some(new_path)
+}
+
+/// Read and parse notebook JSON file
+///
+/// This is useful for verifying notebook state after operations,
+/// especially when testing remote mode where we modify notebooks
+/// through the server.
+pub fn read_notebook_json(path: &Path) -> Result<Value> {
+    let content = std::fs::read_to_string(path)
+        .context(format!("Failed to read notebook file: {}", path.display()))?;
+    serde_json::from_str(&content)
+        .context("Failed to parse notebook JSON")
+}
+
+/// Check if jupyter lab is installed
+pub fn has_jupyter_lab() -> bool {
+    Command::new("jupyter")
+        .args(["lab", "--version"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Check if jupyter-server-documents extension is available
+pub fn has_server_documents_extension() -> bool {
+    let output = Command::new("jupyter")
+        .args(["server", "extension", "list"])
+        .output();
+
+    match output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            stdout.contains("jupyter_server_documents")
+        }
+        Err(_) => false,
+    }
 }

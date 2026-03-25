@@ -36,11 +36,18 @@ fi
 echo "📦 Installing ipykernel..."
 uv pip install --python "$VENV_PATH" ipykernel
 
+# Install JupyterLab and Y.js document sync for browser tests
+echo "📦 Installing JupyterLab with Y.js document sync..."
+uv pip install --python "$VENV_PATH" jupyterlab jupyter-server-documents
+
 echo ""
 echo "✅ Test environment ready!"
 echo ""
 echo "To run execution tests:"
 echo "  cargo test --test integration_execution"
+echo ""
+echo "To run browser tests:"
+echo "  cargo test --test integration_browser_smoke -- --nocapture --test-threads=1"
 echo ""
 echo "To run all tests:"
 echo "  cargo test"

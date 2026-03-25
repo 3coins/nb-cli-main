@@ -11,7 +11,20 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build:
+  lint:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: cargo fmt
+      run: cargo fmt -- --check
+
+    - name: cargo clippy
+      run: cargo clippy -- -D warnings
+
+  test:
 
     runs-on: ubuntu-latest
 

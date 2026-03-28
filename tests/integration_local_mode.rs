@@ -9,15 +9,23 @@ use tempfile::TempDir;
 struct TestEnv {
     temp_dir: TempDir,
     binary_path: PathBuf,
+    venv_path_env: Option<String>,
+    venv_root: Option<PathBuf>,
 }
 
 impl TestEnv {
     fn new() -> Self {
+        // Setup venv for kernel discovery (similar to execution tests)
+        let venv_root = test_helpers::setup_execution_venv();
+        let venv_path_env = test_helpers::setup_venv_environment();
+
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
         let binary_path = env!("CARGO_BIN_EXE_nb").into();
         Self {
             temp_dir,
             binary_path,
+            venv_path_env,
+            venv_root,
         }
     }
 
@@ -38,15 +46,24 @@ impl TestEnv {
     }
 
     fn run(&self, args: &[&str]) -> CommandResult {
-        let output = Command::new(&self.binary_path)
-            .args(args)
+        let mut cmd = Command::new(&self.binary_path);
+        cmd.args(args)
             .current_dir(self.temp_dir.path())
             // Set TMPDIR to the test-specific temp directory for proper test isolation.
             // This ensures each test uses its own nb-cli output directory and prevents
             // race conditions when tests run in parallel.
-            .env("TMPDIR", self.temp_dir.path())
-            .output()
-            .expect("Failed to execute command");
+            .env("TMPDIR", self.temp_dir.path());
+
+        // Set venv environment if available
+        if let Some(path_env) = &self.venv_path_env {
+            cmd.env("PATH", path_env);
+        }
+        if let Some(venv_root) = &self.venv_root {
+            cmd.env("VIRTUAL_ENV", venv_root);
+        }
+        cmd.env_remove("PYTHONHOME"); // Remove if set, as it conflicts with venv
+
+        let output = cmd.output().expect("Failed to execute command");
 
         CommandResult {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),

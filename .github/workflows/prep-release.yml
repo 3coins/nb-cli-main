@@ -183,31 +183,6 @@ jobs:
           sha256sum * > SHA256SUMS || shasum -a 256 * > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Generate changelog
-        id: generate_changelog
-        run: |
-          # Get the previous tag
-          PREV_TAG=$(git describe --tags --abbrev=0 ${{ needs.create-tag.outputs.tag }}^ 2>/dev/null || echo "")
-
-          # Generate changelog
-          if [ -n "$PREV_TAG" ]; then
-            echo "## What's Changed" > CHANGELOG.md
-            echo "" >> CHANGELOG.md
-            git log ${PREV_TAG}..${{ needs.create-tag.outputs.tag }} --pretty=format:"- %s (%h)" --reverse >> CHANGELOG.md
-            echo "" >> CHANGELOG.md
-            echo "" >> CHANGELOG.md
-            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${{ needs.create-tag.outputs.tag }}" >> CHANGELOG.md
-          else
-            echo "## What's Changed" > CHANGELOG.md
-            echo "" >> CHANGELOG.md
-            echo "Initial release of nb-cli - A command-line tool for reading, writing, and executing Jupyter notebooks." >> CHANGELOG.md
-          fi
-
-          echo "" >> CHANGELOG.md
-          echo "---" >> CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "See \`SHA256SUMS\` for checksums to verify downloads." >> CHANGELOG.md
-
       - name: Create Draft Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -215,7 +190,7 @@ jobs:
           gh release create ${{ needs.create-tag.outputs.tag }} \
             --draft \
             --title "${{ needs.create-tag.outputs.tag }}" \
-            --notes-file CHANGELOG.md \
+            --generate-notes \
             release-assets/*
 
       - name: Summary

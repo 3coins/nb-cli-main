@@ -1,5 +1,4 @@
 use crate::commands::common::OutputFormat;
-use crate::execution::remote::ydoc::YDocClient;
 use crate::execution::{create_backend, types::ExecutionConfig, types::ExecutionMode};
 use crate::notebook::{read_notebook, write_notebook_atomic};
 use anyhow::{Context, Result};
@@ -53,6 +52,14 @@ pub struct ExecuteNotebookArgs {
     /// Output in JSON format instead of text
     #[arg(long)]
     pub json: bool,
+
+    /// Use uv to discover kernels in local mode
+    #[arg(long, conflicts_with = "pixi")]
+    pub uv: bool,
+
+    /// Use pixi to discover kernels in local mode
+    #[arg(long, conflicts_with = "uv")]
+    pub pixi: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -74,10 +81,19 @@ pub fn execute(args: ExecuteNotebookArgs) -> Result<()> {
 
 async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     use crate::commands::common;
+    use crate::commands::env_manager::EnvConfig;
+
     let format = if args.json {
         OutputFormat::Json
     } else {
         OutputFormat::Text
+    };
+
+    // Create environment configuration for local mode
+    let env_config = if args.uv || args.pixi {
+        Some(EnvConfig::from_flags(args.uv, args.pixi)?)
+    } else {
+        None
     };
 
     // Read notebook
@@ -137,14 +153,12 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         .context("Notebook path contains invalid UTF-8")?
         .to_string();
 
-    // For remote mode, extract just the filename for session matching
+    // For remote mode, compute path relative to server root so that
+    // notebooks with the same name in different directories get distinct sessions.
     let notebook_identifier =
         if matches!(mode, crate::execution::types::ExecutionMode::Remote { .. }) {
-            std::path::Path::new(&file_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(String::from)
-                .unwrap_or(notebook_path_str.clone())
+            let server_root = common::resolve_server_root();
+            common::notebook_path_for_server(&file_path, server_root.as_deref())
         } else {
             // For local mode, use full absolute path
             notebook_path_str.clone()
@@ -157,14 +171,12 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         kernel_name: args.kernel.or_else(|| notebook_kernel.map(String::from)),
         allow_errors: args.allow_errors,
         notebook_path: Some(notebook_identifier.clone()),
+        env_config: env_config.clone(),
     };
 
     // Create and start backend (reuse kernel for all cells)
     let mut backend = create_backend(config)?;
-    backend
-        .start()
-        .await
-        .context("Failed to start execution backend")?;
+    backend.start().await?;
 
     // Execute cells in range and collect results
     let mut executed_count = 0;
@@ -229,7 +241,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         }
     }
 
-    // Stop backend
+    // Stop backend (just closes WebSocket, session persists)
     backend.stop().await?;
 
     // Update notebook cells with execution results
@@ -251,53 +263,12 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
             // Write notebook to file
             write_notebook_atomic(&file_path, &notebook).context("Failed to write notebook")?;
         }
-        ExecutionMode::Remote {
-            ref server_url,
-            ref token,
-        } => {
-            // Sync outputs to JupyterLab via Y.js
-            let notebook_path = notebook_identifier.clone();
-
-            match YDocClient::connect(server_url.clone(), token.clone(), notebook_path).await {
-                Ok(mut ydoc_client) => {
-                    // Update each executed cell's outputs and execution_count
-                    for (i, result) in &execution_results {
-                        // Update outputs
-                        if let Err(e) = ydoc_client.update_cell_outputs(*i, result.outputs.clone())
-                        {
-                            eprintln!("  Warning: Failed to update outputs for cell {}: {}", i, e);
-                        }
-
-                        // Update execution_count
-                        if let Err(e) =
-                            ydoc_client.update_cell_execution_count(*i, result.execution_count)
-                        {
-                            eprintln!(
-                                "  Warning: Failed to update execution count for cell {}: {}",
-                                i, e
-                            );
-                        }
-                    }
-
-                    // Sync changes to server
-                    match ydoc_client.sync().await {
-                        Ok(_) => {}
-                        Err(e) => {
-                            eprintln!("  Warning: Failed to sync Y.js updates: {}", e);
-                        }
-                    }
-
-                    // Close connection
-                    let _ = ydoc_client.close().await;
-                }
-                Err(e) => {
-                    eprintln!("\nWarning: Could not connect to Y.js document: {}", e);
-                    eprintln!("  Outputs will not appear in JupyterLab UI automatically.");
-                    eprintln!(
-                        "  Make sure jupyter-server-documents is installed: pip install jupyter-server-documents"
-                    );
-                }
-            }
+        ExecutionMode::Remote { .. } => {
+            // In remote mode, Jupyter Server automatically updates the Y.js document
+            // when it receives kernel execution messages. The outputs are already
+            // processed by jupyter-server-documents and will be auto-saved to disk
+            // within ~1 second (configured save_delay). No need to wait as nb-cli
+            // already has all outputs from the kernel execution.
         }
     }
 

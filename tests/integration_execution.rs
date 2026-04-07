@@ -343,12 +343,6 @@ fn test_execute_with_allow_errors() {
     // Execute with --allow-errors (still exits with error code but updates notebook)
     let result = env.run(&["execute", nb_path.to_str().unwrap(), "--allow-errors"]);
 
-    // Summary goes to stderr
-    assert!(
-        result.stderr.contains("Executed") || result.stderr.contains("completed"),
-        "Summary should appear on stderr"
-    );
-
     // Stdout should contain notebook markdown with outputs from both cells
     assert!(
         test_helpers::parse_notebook_header(&result.stdout).is_some(),
@@ -441,11 +435,6 @@ fn test_execute_last_cell_with_negative_index() {
     assert!(
         test_helpers::parse_notebook_header(&result.stdout).is_some(),
         "Execute stdout should contain @@notebook header"
-    );
-    // Summary on stderr
-    assert!(
-        result.stderr.contains("Executed: 1"),
-        "Summary should show 1 executed cell on stderr"
     );
 }
 

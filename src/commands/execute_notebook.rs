@@ -188,8 +188,6 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     let mut last_executed_cell_id: Option<String> = None;
     let mut last_executed_old_ec: Option<i32> = None;
 
-    let mut code_cell_num = 0;
-
     for (i, cell) in notebook.cells.iter().enumerate() {
         // Skip cells outside range
         if i < start_idx || i > end_idx {
@@ -200,8 +198,6 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         if !matches!(cell, Cell::Code { .. }) {
             continue;
         }
-
-        code_cell_num += 1;
 
         // Get cell source and cell_id
         let source = crate::commands::common::cell_to_string(cell);
@@ -226,21 +222,10 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
                 if !success {
                     failed_count += 1;
 
-                    if !matches!(format, OutputFormat::Json) {
-                        eprintln!("  ✗ Cell {} completed with error", code_cell_num);
-                        if let Some(error) =
-                            execution_results.get(&i).and_then(|r| r.error.as_ref())
-                        {
-                            eprintln!("    Error: {}: {}", error.ename, error.evalue);
-                        }
-                    }
-
                     // Stop on error unless --allow-errors
                     if !args.allow_errors {
                         break;
                     }
-                } else if !matches!(format, OutputFormat::Json) {
-                    eprintln!("  ✓ Cell {} completed", code_cell_num);
                 }
             }
             Err(e) => {
@@ -313,24 +298,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     let success = failed_count == 0;
     let total_cells = end_idx - start_idx + 1;
 
-    // Output summary to stderr (diagnostics)
-    eprintln!("\n{}", "=".repeat(50));
-    if success {
-        eprintln!("✓ Notebook executed successfully");
-    } else {
-        eprintln!("✗ Notebook execution completed with errors");
-    }
-    eprintln!("Total cells in range: {}", total_cells);
-    eprintln!("Executed: {}", executed_count);
-    eprintln!("Failed: {}", failed_count);
-
-    if matches!(mode, ExecutionMode::Local) {
-        eprintln!("\nNotebook updated: {}", file_path);
-    } else {
-        eprintln!("\n(Executed via Jupyter Server)");
-    }
-
-    // Output notebook content to stdout (data)
+    // Output notebook content to stdout
     match format {
         OutputFormat::Json => {
             let cells = common::serialize_cells_json(&notebook.cells, true);

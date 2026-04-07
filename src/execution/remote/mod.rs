@@ -61,10 +61,13 @@ impl RemoteExecutor {
                 };
 
                 // Only process messages related to our execution
-                if let Some(parent) = &msg.parent_header {
-                    if parent.msg_id != msg_id {
-                        continue;
-                    }
+                let is_our_message = msg
+                    .parent_header
+                    .as_ref()
+                    .map(|h| h.msg_id == msg_id)
+                    .unwrap_or(false);
+                if !is_our_message {
+                    continue;
                 }
 
                 // Process message content

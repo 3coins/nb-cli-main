@@ -85,9 +85,19 @@ impl KernelWebSocket {
         }
 
         // Parse the JSON components
+        // Empty buffers (0 bytes) are valid in the Jupyter protocol (e.g., empty parent_header
+        // or metadata). Default to empty JSON object to avoid dropping the entire message.
         let header: serde_json::Value = serde_json::from_slice(buffers[1]).ok()?;
-        let parent_header: serde_json::Value = serde_json::from_slice(buffers[2]).ok()?;
-        let metadata: serde_json::Value = serde_json::from_slice(buffers[3]).ok()?;
+        let parent_header: serde_json::Value = if buffers[2].is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_slice(buffers[2]).ok()?
+        };
+        let metadata: serde_json::Value = if buffers[3].is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_slice(buffers[3]).ok()?
+        };
         let content_json: serde_json::Value = serde_json::from_slice(buffers[4]).ok()?;
 
         // Construct a full message

@@ -182,9 +182,11 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     // Execute cells in range and collect results
     let mut executed_count = 0;
     let mut failed_count = 0;
-    let _total_cells = notebook.cells.len();
     let mut execution_results: HashMap<usize, crate::execution::types::ExecutionResult> =
         HashMap::new();
+    // Track the last executed cell for remote mode save polling
+    let mut last_executed_cell_id: Option<String> = None;
+    let mut last_executed_old_ec: Option<i32> = None;
 
     let mut code_cell_num = 0;
 
@@ -213,6 +215,13 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
                 // Store result for later processing
                 execution_results.insert(i, result);
                 executed_count += 1;
+                last_executed_cell_id = Some(cell_id.clone());
+                last_executed_old_ec = match &notebook.cells[i] {
+                    Cell::Code {
+                        execution_count, ..
+                    } => *execution_count,
+                    _ => None,
+                };
 
                 if !success {
                     failed_count += 1;
@@ -264,11 +273,39 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
             write_notebook_atomic(&file_path, &notebook).context("Failed to write notebook")?;
         }
         ExecutionMode::Remote { .. } => {
-            // In remote mode, Jupyter Server automatically updates the Y.js document
-            // when it receives kernel execution messages. The outputs are already
-            // processed by jupyter-server-documents and will be auto-saved to disk
-            // within ~1 second (configured save_delay). No need to wait as nb-cli
-            // already has all outputs from the kernel execution.
+            // In remote mode, jupyter-server-documents routes kernel outputs to Y.js
+            // document sync (not the WebSocket), which auto-saves to disk.
+            // Poll until the last executed cell's execution_count changes on disk.
+            if let Some(ref cell_id) = last_executed_cell_id {
+                let poll_timeout = Duration::from_secs(5);
+                let poll_start = std::time::Instant::now();
+                loop {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    if let Ok(saved) = read_notebook(&file_path) {
+                        let ready = saved.cells.iter().any(|c| {
+                            if c.id().as_str() != cell_id {
+                                return false;
+                            }
+                            match c {
+                                Cell::Code {
+                                    execution_count, ..
+                                } => *execution_count != last_executed_old_ec,
+                                _ => false,
+                            }
+                        });
+                        if ready {
+                            notebook = saved;
+                            break;
+                        }
+                    }
+                    if poll_start.elapsed() > poll_timeout {
+                        if let Ok(saved) = read_notebook(&file_path) {
+                            notebook = saved;
+                        }
+                        break;
+                    }
+                }
+            }
         }
     }
 

@@ -195,27 +195,43 @@ impl ExecutionBackend for RemoteExecutor {
             if let Ok(cell_data) = ydoc.read_cell_outputs(cell_idx) {
                 let ec = cell_data.execution_count;
                 let ec_changed = ec != prev_ec && ec.is_some();
-                let current_count = cell_data.externalized_urls.len();
+                let total_count =
+                    cell_data.externalized_urls.len() + cell_data.inline_outputs.len();
 
                 // Outputs were cleared (reset for new execution)
-                if current_count < seen_output_count {
+                if total_count < seen_output_count {
                     seen_output_count = 0;
                     outputs.clear();
                 }
 
-                // Fetch new outputs
-                if current_count > seen_output_count {
-                    for (_, url_path) in &cell_data.externalized_urls[seen_output_count..] {
-                        if let Some(output) =
-                            Self::fetch_output(&http, &self.server_url, &self.token, url_path).await
-                        {
+                // Collect new outputs (both externalized and inline)
+                if total_count > seen_output_count {
+                    // Build a sorted list of all outputs by index
+                    let mut new_outputs: Vec<(usize, Option<nbformat::v4::Output>)> = Vec::new();
+                    for (idx, url_path) in &cell_data.externalized_urls {
+                        if *idx >= seen_output_count {
+                            let output =
+                                Self::fetch_output(&http, &self.server_url, &self.token, url_path)
+                                    .await;
+                            new_outputs.push((*idx, output));
+                        }
+                    }
+                    for (idx, output) in &cell_data.inline_outputs {
+                        if *idx >= seen_output_count {
+                            new_outputs.push((*idx, Some(output.clone())));
+                        }
+                    }
+                    new_outputs.sort_by_key(|(idx, _)| *idx);
+
+                    for (_, output) in new_outputs {
+                        if let Some(output) = output {
                             if let Some(cb) = &on_output {
                                 cb(&output);
                             }
                             outputs.push(output);
                         }
                     }
-                    seen_output_count = current_count;
+                    seen_output_count = total_count;
                 }
 
                 // Done when kernel is idle and execution_count has changed

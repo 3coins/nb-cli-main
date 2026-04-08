@@ -21,6 +21,8 @@ pub struct YDocCellOutputs {
     pub execution_count: Option<i64>,
     /// (output_index, url) for outputs externalized by jupyter-server-documents
     pub externalized_urls: Vec<(usize, String)>,
+    /// (output_index, output) for inline outputs stored directly in Y.js (e.g. images)
+    pub inline_outputs: Vec<(usize, nbformat::v4::Output)>,
 }
 
 /// Convert yrs::Any to serde_json::Value for JSON round-trip deserialization
@@ -483,8 +485,9 @@ impl YDocClient {
                     _ => None,
                 });
 
-        // Read outputs array — collect URLs for externalized outputs
+        // Read outputs array — collect externalized (have metadata.url) and inline outputs
         let mut urls: Vec<(usize, String)> = Vec::new();
+        let mut inline: Vec<(usize, nbformat::v4::Output)> = Vec::new();
 
         if let Some(outputs_val) = cell_map.get(&txn, "outputs") {
             if let Ok(arr) = outputs_val.cast::<ArrayRef>() {
@@ -493,13 +496,16 @@ impl YDocClient {
                     if let Some(item) = arr.get(&txn, i) {
                         let json_val = item.to_json(&txn);
                         let json = any_to_json(&json_val);
-                        // Check for externalized output (metadata.url present)
                         if let Some(url) = json
                             .get("metadata")
                             .and_then(|m| m.get("url"))
                             .and_then(|u| u.as_str())
                         {
                             urls.push((i as usize, url.to_string()));
+                        } else if let Ok(output) =
+                            serde_json::from_value::<nbformat::v4::Output>(json)
+                        {
+                            inline.push((i as usize, output));
                         }
                     }
                 }
@@ -509,6 +515,7 @@ impl YDocClient {
         Ok(YDocCellOutputs {
             execution_count,
             externalized_urls: urls,
+            inline_outputs: inline,
         })
     }
 

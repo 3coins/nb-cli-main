@@ -154,32 +154,81 @@ impl ExecutionBackend for RemoteExecutor {
         let ydoc = self.ydoc.as_mut().context("Y.js client not connected")?;
         let http = reqwest::Client::new();
 
-        // 1. Snapshot current state before execution
-        let prev_ec = ydoc
-            .read_cell_outputs(cell_idx)
-            .ok()
-            .and_then(|c| c.execution_count);
-
-        // 2. Fire execute request
+        // 1. Fire execute request
         let msg_id = ws
             .send_execute_request(code, !self.config.allow_errors, cell_id)
             .await?;
 
-        // 3. Watch for changes on the ydoc for this cell
+        // 2. Watch for changes on the ydoc for this cell
         let mut outputs: Vec<nbformat::v4::Output> = Vec::new();
         let mut fetched_urls: HashSet<String> = HashSet::new();
         let mut seen_indices: HashSet<usize> = HashSet::new();
         let mut idle_received = false;
-        let mut ec_changed = false;
+        let mut expected_ec: Option<i64> = None;
         let deadline = tokio::time::Instant::now() + self.config.timeout;
 
         loop {
-            // Wait for either a kernel message or a ydoc update
+            // 3. Check ydoc state before blocking — the update may already
+            //    have been applied in a previous iteration.
+            let cell_data = ydoc.read_cell_outputs(cell_idx).ok();
+            let ec = cell_data.as_ref().and_then(|d| d.execution_count);
+            let ec_ready = expected_ec.is_some() && ec == expected_ec;
+
+            if ec_ready {
+                if let Some(ref cell_data) = cell_data {
+                    for (idx, url_path) in &cell_data.externalized_urls {
+                        if fetched_urls.insert(url_path.clone()) {
+                            seen_indices.insert(*idx);
+                            if let Some(output) =
+                                Self::fetch_output(&http, &self.server_url, &self.token, url_path)
+                                    .await
+                            {
+                                if let Some(cb) = &on_output {
+                                    cb(&output);
+                                }
+                                outputs.push(output);
+                            }
+                        }
+                    }
+                    for (idx, output) in &cell_data.inline_outputs {
+                        if seen_indices.insert(*idx) {
+                            if let Some(cb) = &on_output {
+                                cb(output);
+                            }
+                            outputs.push(output.clone());
+                        }
+                    }
+                }
+
+                if idle_received {
+                    let has_error = outputs
+                        .iter()
+                        .any(|o| matches!(o, nbformat::v4::Output::Error(_)));
+                    let error_info = outputs.iter().find_map(|o| {
+                        if let nbformat::v4::Output::Error(err) = o {
+                            Some(ExecutionError {
+                                ename: err.ename.clone(),
+                                evalue: err.evalue.clone(),
+                                traceback: err.traceback.clone(),
+                            })
+                        } else {
+                            None
+                        }
+                    });
+                    return if has_error {
+                        Ok(ExecutionResult::error(outputs, ec, error_info.unwrap()))
+                    } else {
+                        Ok(ExecutionResult::success(outputs, ec))
+                    };
+                }
+            }
+
+            // 4. Wait for new messages
             if idle_received {
                 match tokio::time::timeout_at(deadline, ydoc.recv_update()).await {
                     Ok(Ok(_)) => {}
                     Ok(Err(e)) => return Err(e).context("Y.js update error"),
-                    Err(_) => break, // timeout — return what we have
+                    Err(_) => break,
                 }
             } else {
                 tokio::select! {
@@ -188,11 +237,17 @@ impl ExecutionBackend for RemoteExecutor {
                             let is_ours = msg.parent_header.as_ref()
                                 .map(|h| h.msg_id == msg_id).unwrap_or(false);
                             if is_ours {
-                                if let JupyterMessageContent::Status(status) = msg.content {
-                                    if matches!(status.execution_state,
-                                        jupyter_protocol::ExecutionState::Idle) {
-                                        idle_received = true;
+                                match &msg.content {
+                                    JupyterMessageContent::ExecuteInput(input) => {
+                                        expected_ec = Some(input.execution_count.0 as i64);
                                     }
+                                    JupyterMessageContent::Status(status) => {
+                                        if matches!(status.execution_state,
+                                            jupyter_protocol::ExecutionState::Idle) {
+                                            idle_received = true;
+                                        }
+                                    }
+                                    _ => {}
                                 }
                             }
                         }
@@ -201,68 +256,6 @@ impl ExecutionBackend for RemoteExecutor {
                         ydoc_result.context("Y.js update error")?;
                     }
                 }
-            }
-
-            // 4. Read cell state from ydoc
-            let cell_data = match ydoc.read_cell_outputs(cell_idx) {
-                Ok(d) => d,
-                Err(_) => continue,
-            };
-            let ec = cell_data.execution_count;
-
-            // Wait for execution_count to change — ignore stale outputs from previous run
-            if !ec_changed {
-                if ec != prev_ec && ec.is_some() {
-                    ec_changed = true;
-                } else {
-                    continue;
-                }
-            }
-
-            // 5. Load new outputs as they appear
-            for (idx, url_path) in &cell_data.externalized_urls {
-                if fetched_urls.insert(url_path.clone()) {
-                    seen_indices.insert(*idx);
-                    if let Some(output) =
-                        Self::fetch_output(&http, &self.server_url, &self.token, url_path).await
-                    {
-                        if let Some(cb) = &on_output {
-                            cb(&output);
-                        }
-                        outputs.push(output);
-                    }
-                }
-            }
-            for (idx, output) in &cell_data.inline_outputs {
-                if seen_indices.insert(*idx) {
-                    if let Some(cb) = &on_output {
-                        cb(output);
-                    }
-                    outputs.push(output.clone());
-                }
-            }
-
-            // 6. Done when kernel is idle and ec has changed
-            if idle_received && ec_changed {
-                let has_error = outputs
-                    .iter()
-                    .any(|o| matches!(o, nbformat::v4::Output::Error(_)));
-                let error_info = outputs.iter().find_map(|o| {
-                    if let nbformat::v4::Output::Error(err) = o {
-                        Some(ExecutionError {
-                            ename: err.ename.clone(),
-                            evalue: err.evalue.clone(),
-                            traceback: err.traceback.clone(),
-                        })
-                    } else {
-                        None
-                    }
-                });
-                return if has_error {
-                    Ok(ExecutionResult::error(outputs, ec, error_info.unwrap()))
-                } else {
-                    Ok(ExecutionResult::success(outputs, ec))
-                };
             }
         }
 

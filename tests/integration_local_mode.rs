@@ -894,6 +894,416 @@ fn test_add_consecutive_cells_correct_count() {
     assert_eq!(json3["total_cells"], 3);
 }
 
+// ==================== MULTI-CELL ADD TESTS (@@sentinel format) ====================
+
+#[test]
+fn test_add_multiple_cells_with_sentinels() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&[
+            "cell",
+            "add",
+            nb_path.to_str().unwrap(),
+            "-s",
+            "@@code\nx = 1\n@@code\ny = 2\n@@code\nz = 3",
+            "--json",
+        ])
+        .assert_success();
+
+    let json = result.json_value();
+    assert_eq!(json["cells_added"], 3);
+    assert_eq!(json["total_cells"], 3);
+
+    let cells = json["cells"].as_array().unwrap();
+    assert_eq!(cells.len(), 3);
+    assert_eq!(cells[0]["index"], 0);
+    assert_eq!(cells[1]["index"], 1);
+    assert_eq!(cells[2]["index"], 2);
+    assert_eq!(cells[0]["cell_type"], "code");
+}
+
+#[test]
+fn test_add_multiple_cells_mixed_types() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&[
+            "cell",
+            "add",
+            nb_path.to_str().unwrap(),
+            "-s",
+            "@@markdown\n# Title\n@@code\nx = 1\n@@raw\nraw stuff",
+            "--json",
+        ])
+        .assert_success();
+
+    let json = result.json_value();
+    assert_eq!(json["cells_added"], 3);
+
+    let cells = json["cells"].as_array().unwrap();
+    assert_eq!(cells[0]["cell_type"], "markdown");
+    assert_eq!(cells[1]["cell_type"], "code");
+    assert_eq!(cells[2]["cell_type"], "raw");
+
+    // Verify sources by reading the notebook
+    let read_result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
+        .assert_success();
+    let nb_json = read_result.json_value();
+    let nb_cells = nb_json["cells"].as_array().unwrap();
+    assert_eq!(join_source(&nb_cells[0]["source"]), "# Title");
+    assert_eq!(join_source(&nb_cells[1]["source"]), "x = 1");
+    assert_eq!(join_source(&nb_cells[2]["source"]), "raw stuff");
+}
+
+#[test]
+fn test_add_multiple_cells_at_index() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&[
+            "cell",
+            "add",
+            nb_path.to_str().unwrap(),
+            "-s",
+            "@@code\ninserted_1\n@@code\ninserted_2",
+            "--insert-at",
+            "1",
+            "--json",
+        ])
+        .assert_success();
+
+    let json = result.json_value();
+    assert_eq!(json["cells_added"], 2);
+    assert_eq!(json["total_cells"], 4); // 2 existing + 2 new
+
+    let cells = json["cells"].as_array().unwrap();
+    assert_eq!(cells[0]["index"], 1);
+    assert_eq!(cells[1]["index"], 2);
+
+    // Verify ordering by reading the notebook
+    let read_result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
+        .assert_success();
+    let nb_json = read_result.json_value();
+    let nb_cells = nb_json["cells"].as_array().unwrap();
+    assert_eq!(nb_cells.len(), 4);
+    assert_eq!(join_source(&nb_cells[1]["source"]), "inserted_1");
+    assert_eq!(join_source(&nb_cells[2]["source"]), "inserted_2");
+}
+
+#[test]
+fn test_add_multiple_cells_after_cell_id() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&[
+            "cell",
+            "add",
+            nb_path.to_str().unwrap(),
+            "-s",
+            "@@code\nafter_1\n@@markdown\nafter_2",
+            "--after",
+            "cell-1",
+            "--json",
+        ])
+        .assert_success();
+
+    let json = result.json_value();
+    assert_eq!(json["cells_added"], 2);
+
+    let cells = json["cells"].as_array().unwrap();
+    assert_eq!(cells[0]["index"], 1);
+    assert_eq!(cells[1]["index"], 2);
+
+    // Verify ordering
+    let read_result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
+        .assert_success();
+    let nb_json = read_result.json_value();
+    let nb_cells = nb_json["cells"].as_array().unwrap();
+    assert_eq!(join_source(&nb_cells[1]["source"]), "after_1");
+    assert_eq!(join_source(&nb_cells[2]["source"]), "after_2");
+}
+
+#[test]
+fn test_add_multiple_cells_id_flag_rejected() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
+
+    env.run(&[
+        "cell",
+        "add",
+        nb_path.to_str().unwrap(),
+        "-s",
+        "@@code\na\n@@code\nb",
+        "--id",
+        "my-id",
+    ])
+    .assert_failure();
+}
+
+#[test]
+fn test_add_multiple_cells_unique_ids() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&[
+            "cell",
+            "add",
+            nb_path.to_str().unwrap(),
+            "-s",
+            "@@code\ncell_a\n@@code\ncell_b\n@@code\ncell_c",
+            "--json",
+        ])
+        .assert_success();
+
+    let json = result.json_value();
+    let cells = json["cells"].as_array().unwrap();
+
+    // All cell IDs should be unique
+    let ids: Vec<&str> = cells
+        .iter()
+        .map(|c| c["cell_id"].as_str().unwrap())
+        .collect();
+    let unique_ids: std::collections::HashSet<&str> = ids.iter().cloned().collect();
+    assert_eq!(ids.len(), unique_ids.len(), "Cell IDs must be unique");
+}
+
+#[test]
+fn test_add_single_cell_backward_compat() {
+    // Source without sentinels uses --type flag and single-cell output format
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&[
+            "cell",
+            "add",
+            nb_path.to_str().unwrap(),
+            "-s",
+            "hello",
+            "--json",
+        ])
+        .assert_success();
+
+    let json = result.json_value();
+    // Single-cell format has cell_id directly (not in a cells array)
+    assert!(json["cell_id"].is_string());
+    assert!(json["cell_type"].is_string());
+    assert!(json["index"].is_number());
+    assert!(json["total_cells"].is_number());
+    // Should NOT have cells_added or cells array
+    assert!(json["cells_added"].is_null());
+    assert!(json["cells"].is_null());
+}
+
+#[test]
+fn test_add_no_source_backward_compat() {
+    // When no -s is provided, should add a single empty cell (backward compat)
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["cell", "add", nb_path.to_str().unwrap(), "--json"])
+        .assert_success();
+
+    let json = result.json_value();
+    assert_eq!(json["index"], 0);
+    assert_eq!(json["total_cells"], 1);
+    // Single-cell format
+    assert!(json["cell_id"].is_string());
+}
+
+#[test]
+fn test_add_sentinel_multiline_source() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&[
+            "cell",
+            "add",
+            nb_path.to_str().unwrap(),
+            "-s",
+            "@@code\ndef hello():\n    print('world')\n\nhello()\n@@markdown\n# Notes\nThis is a note.",
+            "--json",
+        ])
+        .assert_success();
+
+    let json = result.json_value();
+    assert_eq!(json["cells_added"], 2);
+
+    // Verify sources
+    let read_result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
+        .assert_success();
+    let nb_json = read_result.json_value();
+    let nb_cells = nb_json["cells"].as_array().unwrap();
+    assert_eq!(
+        join_source(&nb_cells[0]["source"]),
+        "def hello():\n    print('world')\n\nhello()"
+    );
+    assert_eq!(
+        join_source(&nb_cells[1]["source"]),
+        "# Notes\nThis is a note."
+    );
+}
+
+#[test]
+fn test_add_single_sentinel_still_uses_type() {
+    // A single @@code sentinel should produce a single-cell result format
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&[
+            "cell",
+            "add",
+            nb_path.to_str().unwrap(),
+            "-s",
+            "@@markdown\n# Just one cell",
+            "--json",
+        ])
+        .assert_success();
+
+    let json = result.json_value();
+    // Single-cell format
+    assert_eq!(json["cell_type"], "markdown");
+    assert!(json["cell_id"].is_string());
+}
+
+#[test]
+fn test_add_cells_with_cell_json_format() {
+    // Accept @@cell {"cell_type": "..."} format (matches nb read output)
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&[
+            "cell",
+            "add",
+            nb_path.to_str().unwrap(),
+            "-s",
+            "@@cell {\"cell_type\": \"code\"}\nx = 1\n@@cell {\"cell_type\": \"markdown\"}\n# Title",
+            "--json",
+        ])
+        .assert_success();
+
+    let json = result.json_value();
+    assert_eq!(json["cells_added"], 2);
+
+    let cells = json["cells"].as_array().unwrap();
+    assert_eq!(cells[0]["cell_type"], "code");
+    assert_eq!(cells[1]["cell_type"], "markdown");
+
+    // Verify sources by reading the notebook
+    let read_result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
+        .assert_success();
+    let nb_json = read_result.json_value();
+    let nb_cells = nb_json["cells"].as_array().unwrap();
+    assert_eq!(join_source(&nb_cells[0]["source"]), "x = 1");
+    assert_eq!(join_source(&nb_cells[1]["source"]), "# Title");
+}
+
+#[test]
+fn test_add_cell_content_with_sentinel_literal_not_lost() {
+    // Content that mentions @@code should NOT trigger multi-cell mode
+    // when the first non-empty line is not a sentinel
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&[
+            "cell",
+            "add",
+            nb_path.to_str().unwrap(),
+            "-s",
+            "Use @@code to start a code cell",
+            "-t",
+            "markdown",
+            "--json",
+        ])
+        .assert_success();
+
+    let json = result.json_value();
+    // Single-cell format, not multi-cell
+    assert_eq!(json["cell_type"], "markdown");
+    assert!(json["cell_id"].is_string());
+
+    // Verify the full content is preserved (no data loss)
+    let read_result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
+        .assert_success();
+    let nb_json = read_result.json_value();
+    let nb_cells = nb_json["cells"].as_array().unwrap();
+    assert_eq!(
+        join_source(&nb_cells[0]["source"]),
+        "Use @@code to start a code cell"
+    );
+}
+
+#[test]
+fn test_add_cell_with_metadata_from_sentinel_json() {
+    // Metadata in the @@cell JSON block should be written to the notebook
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&[
+            "cell",
+            "add",
+            nb_path.to_str().unwrap(),
+            "-s",
+            r#"@@cell {"cell_type": "code", "metadata": {"tags": ["setup", "hidden"]}}
+x = 1
+@@cell {"cell_type": "markdown", "metadata": {"editable": false}}
+# Read-only title
+@@code
+plain cell"#,
+            "--json",
+        ])
+        .assert_success();
+
+    let json = result.json_value();
+    assert_eq!(json["cells_added"], 3);
+
+    // Read back the raw notebook JSON to verify metadata persisted
+    let read_result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
+        .assert_success();
+    let nb_json = read_result.json_value();
+    let nb_cells = nb_json["cells"].as_array().unwrap();
+
+    // First cell: tags from sentinel metadata
+    let meta0 = &nb_cells[0]["metadata"];
+    let tags: Vec<&str> = meta0["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(tags, vec!["setup", "hidden"]);
+
+    // Second cell: editable flag from sentinel metadata
+    let meta1 = &nb_cells[1]["metadata"];
+    assert_eq!(meta1["editable"], false);
+
+    // Third cell: shorthand sentinel — empty metadata
+    let meta2 = &nb_cells[2]["metadata"];
+    assert!(meta2.is_object());
+    assert!(
+        meta2.as_object().unwrap().is_empty() || !meta2.as_object().unwrap().contains_key("tags")
+    );
+}
+
 // ==================== CELL UPDATE TESTS ====================
 
 #[test]

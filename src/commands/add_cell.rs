@@ -2,7 +2,7 @@ use crate::commands::common::{self, CellType, OutputFormat};
 use crate::notebook;
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use nbformat::v4::{Cell, CellId};
+use nbformat::v4::{Cell, CellId, CellMetadata};
 use serde::Serialize;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -21,8 +21,9 @@ pub struct AddCellArgs {
     )]
     pub cell_type: CellType,
 
-    /// Cell source content (use '-' for stdin). Use @@code, @@markdown, @@raw
-    /// sentinels on their own line to add multiple cells in one call.
+    /// Cell source content (use '-' for stdin). Start with a sentinel line
+    /// (@@code, @@markdown, @@raw, or @@cell {"cell_type":"..."}) to add
+    /// multiple cells in one call.
     #[arg(short = 's', long = "source", value_name = "TEXT", default_value = "")]
     pub source: String,
 
@@ -83,40 +84,48 @@ struct AddedCellInfo {
 struct ParsedCell {
     cell_type: CellType,
     source: Vec<String>,
+    metadata: Option<CellMetadata>,
 }
 
 /// Try to parse the source text as sentinel-delimited multi-cell input.
 ///
-/// Recognizes `@@code`, `@@markdown`, and `@@raw` on their own line as cell
-/// delimiters. Returns `None` if no sentinels are found (caller should treat the
-/// entire text as a single cell).
+/// Recognizes `@@code`, `@@markdown`, `@@raw`, and `@@cell {"cell_type": "..."}` on
+/// their own line as cell delimiters. Multi-cell mode is only activated when the
+/// first non-empty line is a sentinel; this prevents accidental data loss when cell
+/// content happens to mention these tokens. Returns `None` if the first non-empty
+/// line is not a sentinel (caller should treat the entire text as a single cell).
 fn parse_multi_cell_source(text: &str) -> Option<Vec<ParsedCell>> {
     let lines: Vec<&str> = text.lines().collect();
 
-    let has_sentinels = lines.iter().any(|line| sentinel_type(line).is_some());
-    if !has_sentinels {
+    // Multi-cell mode is only activated when the first non-empty line is a
+    // sentinel. This prevents accidental data loss when cell content happens
+    // to contain @@code/@@markdown/@@raw as literal text.
+    let first_non_empty = lines.iter().find(|line| !line.trim().is_empty());
+    if first_non_empty.map_or(true, |line| parse_sentinel(line).is_none()) {
         return None;
     }
 
     let mut cells = Vec::new();
     let mut current_type: Option<CellType> = None;
+    let mut current_metadata: Option<CellMetadata> = None;
     let mut current_lines: Vec<&str> = Vec::new();
 
     for line in &lines {
-        if let Some(cell_type) = sentinel_type(line) {
+        if let Some(info) = parse_sentinel(line) {
             // Finish previous cell if any
             if let Some(ct) = current_type.take() {
                 cells.push(ParsedCell {
                     cell_type: ct,
                     source: common::split_source(&join_cell_lines(&current_lines)),
+                    metadata: current_metadata.take(),
                 });
                 current_lines.clear();
             }
-            current_type = Some(cell_type);
+            current_type = Some(info.cell_type);
+            current_metadata = info.metadata;
         } else if current_type.is_some() {
             current_lines.push(line);
         }
-        // Lines before the first sentinel are ignored
     }
 
     // Finish last cell
@@ -124,44 +133,77 @@ fn parse_multi_cell_source(text: &str) -> Option<Vec<ParsedCell>> {
         cells.push(ParsedCell {
             cell_type: ct,
             source: common::split_source(&join_cell_lines(&current_lines)),
+            metadata: current_metadata,
         });
     }
 
     Some(cells)
 }
 
-/// Match a sentinel line to a cell type.
-fn sentinel_type(line: &str) -> Option<CellType> {
-    match line.trim() {
-        "@@code" => Some(CellType::Code),
-        "@@markdown" => Some(CellType::Markdown),
-        "@@raw" => Some(CellType::Raw),
+/// Parsed sentinel data: cell type and optional metadata from the JSON block.
+struct SentinelInfo {
+    cell_type: CellType,
+    metadata: Option<CellMetadata>,
+}
+
+/// Parse a sentinel line into its cell type and optional metadata.
+///
+/// Accepts both shorthand (`@@code`, `@@markdown`, `@@raw`) and the full
+/// `@@cell {"cell_type": "...", "metadata": {...}}` format produced by `nb read`.
+/// When the `@@cell` JSON format includes a `"metadata"` object, it is deserialized
+/// as `CellMetadata` and carried through to cell creation.
+fn parse_sentinel(line: &str) -> Option<SentinelInfo> {
+    let trimmed = line.trim();
+    match trimmed {
+        "@@code" => Some(SentinelInfo { cell_type: CellType::Code, metadata: None }),
+        "@@markdown" => Some(SentinelInfo { cell_type: CellType::Markdown, metadata: None }),
+        "@@raw" => Some(SentinelInfo { cell_type: CellType::Raw, metadata: None }),
+        _ if trimmed.starts_with("@@cell ") => {
+            let json_str = trimmed.strip_prefix("@@cell ")?.trim();
+            let json: serde_json::Value = serde_json::from_str(json_str).ok()?;
+            let cell_type = match json.get("cell_type")?.as_str()? {
+                "code" => CellType::Code,
+                "markdown" => CellType::Markdown,
+                "raw" => CellType::Raw,
+                _ => return None,
+            };
+            let metadata = json
+                .get("metadata")
+                .and_then(|v| serde_json::from_value::<CellMetadata>(v.clone()).ok());
+            Some(SentinelInfo { cell_type, metadata })
+        }
         _ => None,
     }
 }
 
-/// Join content lines back into a single string, stripping trailing blank lines.
+/// Join content lines back into a single string, stripping leading and trailing
+/// blank lines so that each cell has no empty lines at the top or bottom.
 fn join_cell_lines(lines: &[&str]) -> String {
+    let mut start = 0;
+    while start < lines.len() && lines[start].is_empty() {
+        start += 1;
+    }
     let mut end = lines.len();
-    while end > 0 && lines[end - 1].is_empty() {
+    while end > start && lines[end - 1].is_empty() {
         end -= 1;
     }
-    if end == 0 {
+    if start >= end {
         return String::new();
     }
-    lines[..end].join("\n")
+    lines[start..end].join("\n")
 }
 
 /// Parse source text into one or more cells.
 ///
-/// If the text contains `@@code`/`@@markdown`/`@@raw` sentinels, each sentinel
-/// starts a new cell of that type. Otherwise a single cell of `default_type` is
-/// returned.
+/// If the first non-empty line is a sentinel (`@@code`/`@@markdown`/`@@raw` or
+/// `@@cell {"cell_type": "..."}`), multi-cell mode is activated and each sentinel
+/// starts a new cell. Otherwise a single cell of `default_type` is returned.
 fn parse_source_into_cells(text: &str, default_type: &CellType) -> Vec<ParsedCell> {
     parse_multi_cell_source(text).unwrap_or_else(|| {
         vec![ParsedCell {
             cell_type: default_type.clone(),
             source: common::split_source(text),
+            metadata: None,
         }]
     })
 }
@@ -263,7 +305,7 @@ async fn execute_with_realtime(
         };
 
         let cell_type_str = cell_type_to_str(&parsed.cell_type);
-        let metadata = create_empty_metadata();
+        let metadata = parsed.metadata.unwrap_or_else(create_empty_metadata);
         let new_cell = create_cell(parsed.cell_type, cell_id.clone(), metadata, parsed.source);
 
         added_cells.push(AddedCellInfo {
@@ -367,7 +409,7 @@ fn execute_file_based(args: AddCellArgs) -> Result<()> {
         };
 
         let cell_type_str = cell_type_to_str(&parsed.cell_type);
-        let metadata = create_empty_metadata();
+        let metadata = parsed.metadata.unwrap_or_else(create_empty_metadata);
         let new_cell = create_cell(parsed.cell_type, cell_id.clone(), metadata, parsed.source);
 
         let actual_index = insert_index + i;
@@ -515,19 +557,95 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_sentinel_type() {
-        assert!(matches!(sentinel_type("@@code"), Some(CellType::Code)));
+    fn test_parse_sentinel_shorthand() {
+        let info = parse_sentinel("@@code").unwrap();
+        assert!(matches!(info.cell_type, CellType::Code));
+        assert!(info.metadata.is_none());
+
+        let info = parse_sentinel("@@markdown").unwrap();
+        assert!(matches!(info.cell_type, CellType::Markdown));
+        assert!(info.metadata.is_none());
+
+        let info = parse_sentinel("@@raw").unwrap();
+        assert!(matches!(info.cell_type, CellType::Raw));
+        assert!(info.metadata.is_none());
+
+        assert!(parse_sentinel("@@output").is_none());
+        assert!(parse_sentinel("not a sentinel").is_none());
+        assert!(parse_sentinel("").is_none());
+        // Trimmed
         assert!(matches!(
-            sentinel_type("@@markdown"),
+            parse_sentinel("  @@code  ").map(|i| i.cell_type),
+            Some(CellType::Code)
+        ));
+    }
+
+    #[test]
+    fn test_parse_sentinel_cell_json() {
+        // Full @@cell {json} format (matches nb read output)
+        let info = parse_sentinel(r#"@@cell {"cell_type": "code"}"#).unwrap();
+        assert!(matches!(info.cell_type, CellType::Code));
+        assert!(info.metadata.is_none());
+
+        assert!(matches!(
+            parse_sentinel(r#"@@cell {"cell_type": "markdown"}"#).map(|i| i.cell_type),
             Some(CellType::Markdown)
         ));
-        assert!(matches!(sentinel_type("@@raw"), Some(CellType::Raw)));
-        assert!(sentinel_type("@@cell").is_none());
-        assert!(sentinel_type("@@output").is_none());
-        assert!(sentinel_type("not a sentinel").is_none());
-        assert!(sentinel_type("").is_none());
-        // Trimmed
-        assert!(matches!(sentinel_type("  @@code  "), Some(CellType::Code)));
+        assert!(matches!(
+            parse_sentinel(r#"@@cell {"cell_type": "raw"}"#).map(|i| i.cell_type),
+            Some(CellType::Raw)
+        ));
+        // With extra fields (as produced by nb read) — no metadata key
+        let info = parse_sentinel(
+            r#"@@cell {"index":0,"id":"abc","cell_type":"code","execution_count":1}"#,
+        )
+        .unwrap();
+        assert!(matches!(info.cell_type, CellType::Code));
+        assert!(info.metadata.is_none());
+
+        // @@cell without JSON or with invalid JSON
+        assert!(parse_sentinel("@@cell").is_none());
+        assert!(parse_sentinel("@@cell {}").is_none());
+        assert!(parse_sentinel("@@cell not-json").is_none());
+        // Unknown cell_type
+        assert!(parse_sentinel(r#"@@cell {"cell_type": "unknown"}"#).is_none());
+    }
+
+    #[test]
+    fn test_parse_sentinel_cell_json_with_metadata() {
+        // Metadata with tags
+        let info = parse_sentinel(
+            r#"@@cell {"cell_type": "code", "metadata": {"tags": ["test", "important"]}}"#,
+        )
+        .unwrap();
+        assert!(matches!(info.cell_type, CellType::Code));
+        let meta = info.metadata.unwrap();
+        assert_eq!(
+            meta.tags.as_ref().unwrap(),
+            &vec!["test".to_string(), "important".to_string()]
+        );
+
+        // Metadata with editable flag
+        let info = parse_sentinel(
+            r#"@@cell {"cell_type": "markdown", "metadata": {"editable": false}}"#,
+        )
+        .unwrap();
+        assert!(matches!(info.cell_type, CellType::Markdown));
+        let meta = info.metadata.unwrap();
+        assert_eq!(meta.editable, Some(false));
+
+        // Empty metadata object — deserialized but all fields are None
+        let info =
+            parse_sentinel(r#"@@cell {"cell_type": "code", "metadata": {}}"#).unwrap();
+        assert!(info.metadata.is_some());
+
+        // Full nb read-style sentinel with metadata
+        let info = parse_sentinel(
+            r#"@@cell {"index":0,"id":"abc","cell_type":"code","metadata":{"tags":["auto"]}}"#,
+        )
+        .unwrap();
+        let meta = info.metadata.unwrap();
+        assert_eq!(meta.tags.as_ref().unwrap(), &vec!["auto".to_string()]);
     }
 
     #[test]
@@ -577,16 +695,72 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_multi_cell_content_before_first_sentinel_ignored() {
+    fn test_parse_multi_cell_content_before_sentinel_is_single_cell() {
+        // When the first non-empty line is NOT a sentinel, multi-cell mode is
+        // not activated — the entire text is treated as single-cell content.
+        // This prevents data loss when cell content mentions @@code etc.
         let input = "ignored preamble\n@@code\nx = 1";
+        assert!(parse_multi_cell_source(input).is_none());
+    }
+
+    #[test]
+    fn test_parse_multi_cell_leading_blank_lines_before_sentinel() {
+        // Leading blank lines before the first sentinel are fine
+        let input = "\n\n@@code\nx = 1";
         let cells = parse_multi_cell_source(input).unwrap();
         assert_eq!(cells.len(), 1);
         assert_eq!(cells[0].source.join(""), "x = 1");
     }
 
     #[test]
+    fn test_parse_multi_cell_cell_json_format() {
+        // Accept @@cell {json} format (matches nb read output)
+        let input = "@@cell {\"cell_type\": \"code\"}\nx = 1\n@@cell {\"cell_type\": \"markdown\"}\n# Title";
+        let cells = parse_multi_cell_source(input).unwrap();
+        assert_eq!(cells.len(), 2);
+        assert!(matches!(cells[0].cell_type, CellType::Code));
+        assert_eq!(cells[0].source.join(""), "x = 1");
+        assert!(cells[0].metadata.is_none());
+        assert!(matches!(cells[1].cell_type, CellType::Markdown));
+        assert_eq!(cells[1].source.join(""), "# Title");
+        assert!(cells[1].metadata.is_none());
+    }
+
+    #[test]
+    fn test_parse_multi_cell_cell_json_with_metadata() {
+        // Metadata from @@cell JSON is carried through to ParsedCell
+        let input = "@@cell {\"cell_type\": \"code\", \"metadata\": {\"tags\": [\"setup\"]}}\nx = 1\n@@cell {\"cell_type\": \"markdown\"}\n# Title";
+        let cells = parse_multi_cell_source(input).unwrap();
+        assert_eq!(cells.len(), 2);
+        let meta = cells[0].metadata.as_ref().unwrap();
+        assert_eq!(meta.tags.as_ref().unwrap(), &vec!["setup".to_string()]);
+        assert!(cells[1].metadata.is_none());
+    }
+
+    #[test]
+    fn test_parse_multi_cell_mixed_shorthand_and_json() {
+        // Mix shorthand and @@cell {json} formats
+        let input = "@@code\nx = 1\n@@cell {\"cell_type\": \"markdown\"}\n# Title";
+        let cells = parse_multi_cell_source(input).unwrap();
+        assert_eq!(cells.len(), 2);
+        assert!(matches!(cells[0].cell_type, CellType::Code));
+        assert!(cells[0].metadata.is_none());
+        assert!(matches!(cells[1].cell_type, CellType::Markdown));
+        assert!(cells[1].metadata.is_none());
+    }
+
+    #[test]
     fn test_parse_multi_cell_trailing_blank_lines_stripped() {
         let input = "@@code\nx = 1\n\n\n@@markdown\n# Title\n\n";
+        let cells = parse_multi_cell_source(input).unwrap();
+        assert_eq!(cells.len(), 2);
+        assert_eq!(cells[0].source.join(""), "x = 1");
+        assert_eq!(cells[1].source.join(""), "# Title");
+    }
+
+    #[test]
+    fn test_parse_multi_cell_leading_blank_lines_in_cell_stripped() {
+        let input = "@@code\n\n\nx = 1\n@@markdown\n\n# Title";
         let cells = parse_multi_cell_source(input).unwrap();
         assert_eq!(cells.len(), 2);
         assert_eq!(cells[0].source.join(""), "x = 1");

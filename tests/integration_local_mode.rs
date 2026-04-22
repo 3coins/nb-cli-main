@@ -1179,6 +1179,129 @@ fn test_add_single_sentinel_still_uses_type() {
     assert!(json["cell_id"].is_string());
 }
 
+#[test]
+fn test_add_cells_with_cell_json_format() {
+    // Accept @@cell {"cell_type": "..."} format (matches nb read output)
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&[
+            "cell",
+            "add",
+            nb_path.to_str().unwrap(),
+            "-s",
+            "@@cell {\"cell_type\": \"code\"}\nx = 1\n@@cell {\"cell_type\": \"markdown\"}\n# Title",
+            "--json",
+        ])
+        .assert_success();
+
+    let json = result.json_value();
+    assert_eq!(json["cells_added"], 2);
+
+    let cells = json["cells"].as_array().unwrap();
+    assert_eq!(cells[0]["cell_type"], "code");
+    assert_eq!(cells[1]["cell_type"], "markdown");
+
+    // Verify sources by reading the notebook
+    let read_result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
+        .assert_success();
+    let nb_json = read_result.json_value();
+    let nb_cells = nb_json["cells"].as_array().unwrap();
+    assert_eq!(join_source(&nb_cells[0]["source"]), "x = 1");
+    assert_eq!(join_source(&nb_cells[1]["source"]), "# Title");
+}
+
+#[test]
+fn test_add_cell_content_with_sentinel_literal_not_lost() {
+    // Content that mentions @@code should NOT trigger multi-cell mode
+    // when the first non-empty line is not a sentinel
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&[
+            "cell",
+            "add",
+            nb_path.to_str().unwrap(),
+            "-s",
+            "Use @@code to start a code cell",
+            "-t",
+            "markdown",
+            "--json",
+        ])
+        .assert_success();
+
+    let json = result.json_value();
+    // Single-cell format, not multi-cell
+    assert_eq!(json["cell_type"], "markdown");
+    assert!(json["cell_id"].is_string());
+
+    // Verify the full content is preserved (no data loss)
+    let read_result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
+        .assert_success();
+    let nb_json = read_result.json_value();
+    let nb_cells = nb_json["cells"].as_array().unwrap();
+    assert_eq!(
+        join_source(&nb_cells[0]["source"]),
+        "Use @@code to start a code cell"
+    );
+}
+
+#[test]
+fn test_add_cell_with_metadata_from_sentinel_json() {
+    // Metadata in the @@cell JSON block should be written to the notebook
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&[
+            "cell",
+            "add",
+            nb_path.to_str().unwrap(),
+            "-s",
+            r#"@@cell {"cell_type": "code", "metadata": {"tags": ["setup", "hidden"]}}
+x = 1
+@@cell {"cell_type": "markdown", "metadata": {"editable": false}}
+# Read-only title
+@@code
+plain cell"#,
+            "--json",
+        ])
+        .assert_success();
+
+    let json = result.json_value();
+    assert_eq!(json["cells_added"], 3);
+
+    // Read back the raw notebook JSON to verify metadata persisted
+    let read_result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
+        .assert_success();
+    let nb_json = read_result.json_value();
+    let nb_cells = nb_json["cells"].as_array().unwrap();
+
+    // First cell: tags from sentinel metadata
+    let meta0 = &nb_cells[0]["metadata"];
+    let tags: Vec<&str> = meta0["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(tags, vec!["setup", "hidden"]);
+
+    // Second cell: editable flag from sentinel metadata
+    let meta1 = &nb_cells[1]["metadata"];
+    assert_eq!(meta1["editable"], false);
+
+    // Third cell: shorthand sentinel — empty metadata
+    let meta2 = &nb_cells[2]["metadata"];
+    assert!(meta2.is_object());
+    assert!(meta2.as_object().unwrap().is_empty() || !meta2.as_object().unwrap().contains_key("tags"));
+}
+
 // ==================== CELL UPDATE TESTS ====================
 
 #[test]

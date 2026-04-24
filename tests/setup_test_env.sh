@@ -36,11 +36,18 @@ fi
 echo "📦 Installing ipykernel..."
 uv pip install --python "$VENV_PATH" ipykernel
 
+# Install jupyter_server and jupyter-server-documents for connect-mode tests
+echo "📦 Installing jupyter_server and jupyter-server-documents..."
+uv pip install --python "$VENV_PATH" jupyter_server jupyter-server-documents
+
 echo ""
 echo "✅ Test environment ready!"
 echo ""
 echo "To run execution tests:"
 echo "  cargo test --test integration_execution"
+echo ""
+echo "To run connect-mode tests (must be single-threaded):"
+echo "  cargo test --test integration_connect_mode -- --test-threads=1"
 echo ""
 echo "To run all tests:"
 echo "  cargo test"

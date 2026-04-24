@@ -76,6 +76,15 @@ jobs:
         cargo test --bins --verbose
         echo "✅ All tests passed!"
 
+    # Connect-mode tests require a running Jupyter server and are not run in CI by default.
+    # To enable, set RUN_CONNECT_TESTS=true in the workflow environment and ensure
+    # jupyter_server + jupyter-server-documents are installed in the test venv.
+    # Note: must use --test-threads=1 to avoid races on the shared Jupyter server.
+    #
+    # - name: Run connect-mode tests
+    #   if: env.RUN_CONNECT_TESTS == 'true'
+    #   run: cargo test --test integration_connect_mode -- --test-threads=1
+
   test-windows:
     name: Test (Windows)
     runs-on: windows-latest

@@ -412,15 +412,17 @@ mod tests {
 
     #[test]
     fn test_get_kernel_dirs_virtual_env() {
-        // When VIRTUAL_ENV is set, its kernels path should appear first
-        std::env::set_var("VIRTUAL_ENV", "/tmp/test-venv");
+        // When VIRTUAL_ENV is set, its kernels path should appear first.
+        // Use a platform-neutral PathBuf comparison so path separators don't matter.
+        let venv = std::env::temp_dir().join("test-venv");
+        std::env::set_var("VIRTUAL_ENV", &venv);
         let dirs = get_kernel_dirs();
         std::env::remove_var("VIRTUAL_ENV");
 
+        let expected = venv.join("share").join("jupyter").join("kernels");
         let first = dirs.first().expect("dirs should be non-empty");
         assert_eq!(
-            first.to_string_lossy(),
-            "/tmp/test-venv/share/jupyter/kernels",
+            first, &expected,
             "VIRTUAL_ENV kernels should be the first entry"
         );
     }

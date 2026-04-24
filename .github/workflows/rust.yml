@@ -75,3 +75,32 @@ jobs:
         cargo test --test integration_execution --verbose
         cargo test --bins --verbose
         echo "✅ All tests passed!"
+
+  test-windows:
+    name: Test (Windows)
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Rust cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Build
+      run: cargo build --verbose
+
+    - name: Run unit tests (kernel discovery)
+      # Integration tests require a Unix shell setup script; run unit tests only.
+      # This verifies Windows-specific #[cfg(target_os = "windows")] code paths compile
+      # and that kernel directory logic is correct on Windows.
+      run: cargo test --bins --verbose

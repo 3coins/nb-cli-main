@@ -248,17 +248,27 @@ fn list_kernels_in_env(env_config: &EnvConfig) -> Result<Vec<String>> {
     Ok(names)
 }
 
-/// Get Jupyter kernel directories
+/// Get Jupyter kernel directories in priority order.
 ///
-/// Checks in priority order:
-/// 1. Virtual environment kernels: $VIRTUAL_ENV/share/jupyter/kernels (if VIRTUAL_ENV is set)
-/// 2. User kernels: ~/.local/share/jupyter/kernels (Linux/Mac)
-/// 3. System kernels: /usr/local/share/jupyter/kernels, /usr/share/jupyter/kernels
-/// 4. Python site-packages kernels
+/// Priority:
+/// 1. Virtual environment: `$VIRTUAL_ENV/share/jupyter/kernels`
+/// 2. User data directory (platform-specific):
+///    - Windows: `%APPDATA%\jupyter\kernels` (Roaming)
+///    - macOS:   `~/Library/Application Support/jupyter/kernels`
+///    - Linux:   `~/.local/share/jupyter/kernels`
+/// 3. Non-Windows home-directory paths:
+///    - Linux:         `~/.local/share/jupyter/kernels`
+///    - macOS (legacy): `~/Library/Jupyter/kernels`
+/// 4. Windows-only explicit paths:
+///    - `%APPDATA%\Jupyter\kernels` (title-case fallback for Jupyter-conventional casing)
+///    - `%PROGRAMDATA%\Jupyter\kernels` (system-wide, equivalent to Unix /usr/local/share)
+/// 5. Unix system paths: `/usr/local/share/jupyter/kernels`, `/usr/share/jupyter/kernels`
+/// 6. Python `jupyter_core.paths.jupyter_path()` — covers Anaconda, custom prefixes, etc.
+///    Tries `python3` then `python` on Unix; `python` then `python3` on Windows.
 fn get_kernel_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
-    // Virtual environment kernels (if VIRTUAL_ENV is set)
+    // 1. Virtual environment kernels (cross-platform: works on all OSes)
     if let Ok(venv) = std::env::var("VIRTUAL_ENV") {
         dirs.push(
             PathBuf::from(venv)
@@ -268,40 +278,85 @@ fn get_kernel_dirs() -> Vec<PathBuf> {
         );
     }
 
-    // User kernels
-    if let Some(data_dir) = dirs::data_local_dir() {
+    // 2. User data directory via the `dirs` crate (platform-aware):
+    //    - Windows: %APPDATA% (Roaming) — where Jupyter installs user kernels
+    //    - macOS/Linux: same result as data_local_dir()
+    //    Note: data_local_dir() returns %LOCALAPPDATA% on Windows, which is wrong for Jupyter.
+    if let Some(data_dir) = dirs::data_dir() {
         dirs.push(data_dir.join("jupyter").join("kernels"));
     }
 
-    // Home directory (macOS/Linux)
-    if let Some(home_dir) = dirs::home_dir() {
-        dirs.push(
-            home_dir
-                .join(".local")
-                .join("share")
-                .join("jupyter")
-                .join("kernels"),
-        );
-        dirs.push(home_dir.join("Library").join("Jupyter").join("kernels")); // macOS
+    // 3. Non-Windows: explicit XDG and macOS legacy paths
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(home_dir) = dirs::home_dir() {
+            // Linux XDG user data path
+            dirs.push(
+                home_dir
+                    .join(".local")
+                    .join("share")
+                    .join("jupyter")
+                    .join("kernels"),
+            );
+            // macOS legacy path (Jupyter 4.x style, distinct from "Application Support")
+            dirs.push(home_dir.join("Library").join("Jupyter").join("kernels"));
+        }
     }
 
-    // System directories
-    dirs.push(PathBuf::from("/usr/local/share/jupyter/kernels"));
-    dirs.push(PathBuf::from("/usr/share/jupyter/kernels"));
-
-    // Try to find Python site-packages kernels using jupyter_core paths
-    if let Ok(output) = std::process::Command::new("python3")
-        .args(["-c", "import jupyter_core.paths; import json; print(json.dumps(jupyter_core.paths.jupyter_path()))"])
-        .output()
+    // 4. Windows-only: explicit %APPDATA% and %PROGRAMDATA% paths
+    //    %APPDATA% with title-case "Jupyter" is the conventional casing used by Jupyter on Windows.
+    //    %PROGRAMDATA% is the system-wide equivalent of /usr/local/share on Unix.
+    #[cfg(target_os = "windows")]
     {
-        if output.status.success() {
-            if let Ok(path_str) = String::from_utf8(output.stdout) {
-                if let Ok(paths) = serde_json::from_str::<Vec<String>>(&path_str) {
-                    for path in paths {
-                        let kernel_path = PathBuf::from(path).join("kernels");
-                        if kernel_path.exists() {
-                            dirs.push(kernel_path);
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let p = PathBuf::from(&appdata).join("Jupyter").join("kernels");
+            if !dirs.contains(&p) {
+                dirs.push(p);
+            }
+        }
+        if let Ok(programdata) = std::env::var("PROGRAMDATA") {
+            dirs.push(PathBuf::from(programdata).join("Jupyter").join("kernels"));
+        }
+    }
+
+    // 5. Unix system-wide paths (not applicable on Windows)
+    #[cfg(not(target_os = "windows"))]
+    {
+        dirs.push(PathBuf::from("/usr/local/share/jupyter/kernels"));
+        dirs.push(PathBuf::from("/usr/share/jupyter/kernels"));
+    }
+
+    // 6. Python jupyter_core paths — catches Anaconda, custom prefixes, and any install
+    //    that doesn't follow the standard directory layout above.
+    //    On Windows the Python executable is "python", not "python3"; try the
+    //    platform-preferred name first and fall back to the other.
+    let python_candidates: &[&str] = if cfg!(target_os = "windows") {
+        &["python", "python3"]
+    } else {
+        &["python3", "python"]
+    };
+
+    'python_discovery: for python_cmd in python_candidates {
+        if let Ok(output) = std::process::Command::new(python_cmd)
+            .args([
+                "-c",
+                "import jupyter_core.paths; import json; \
+                 print(json.dumps(jupyter_core.paths.jupyter_path()))",
+            ])
+            .output()
+        {
+            if output.status.success() {
+                if let Ok(path_str) = String::from_utf8(output.stdout) {
+                    // .trim() guards against a trailing newline confusing serde_json
+                    if let Ok(paths) = serde_json::from_str::<Vec<String>>(path_str.trim()) {
+                        for path in paths {
+                            let kernel_path = PathBuf::from(path).join("kernels");
+                            if !dirs.contains(&kernel_path) && kernel_path.exists() {
+                                dirs.push(kernel_path);
+                            }
                         }
+                        // Don't try the second candidate if the first succeeded
+                        break 'python_discovery;
                     }
                 }
             }
@@ -343,5 +398,95 @@ mod tests {
         let kernels = list_available_kernels(None);
         // Should find at least some kernels (if Jupyter is installed)
         println!("Found {} kernels: {:?}", kernels.len(), kernels);
+    }
+
+    #[test]
+    fn test_get_kernel_dirs_is_nonempty() {
+        // Should always return at least some candidate directories even without Jupyter
+        let dirs = get_kernel_dirs();
+        assert!(
+            !dirs.is_empty(),
+            "get_kernel_dirs() should never return an empty list"
+        );
+    }
+
+    #[test]
+    fn test_get_kernel_dirs_virtual_env() {
+        // When VIRTUAL_ENV is set, its kernels path should appear first
+        std::env::set_var("VIRTUAL_ENV", "/tmp/test-venv");
+        let dirs = get_kernel_dirs();
+        std::env::remove_var("VIRTUAL_ENV");
+
+        let first = dirs.first().expect("dirs should be non-empty");
+        assert_eq!(
+            first.to_string_lossy(),
+            "/tmp/test-venv/share/jupyter/kernels",
+            "VIRTUAL_ENV kernels should be the first entry"
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn test_get_kernel_dirs_contains_unix_system_paths() {
+        let dirs = get_kernel_dirs();
+        let paths: Vec<_> = dirs
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            paths.iter().any(|p| p.contains("/usr/local/share/jupyter")),
+            "Expected /usr/local/share/jupyter/kernels in dirs; got: {:?}",
+            paths
+        );
+        assert!(
+            paths.iter().any(|p| p.contains("/usr/share/jupyter")),
+            "Expected /usr/share/jupyter/kernels in dirs; got: {:?}",
+            paths
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn test_get_kernel_dirs_no_windows_paths_on_unix() {
+        let dirs = get_kernel_dirs();
+        let paths: Vec<_> = dirs
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            !paths
+                .iter()
+                .any(|p| p.contains("AppData") || p.contains("ProgramData")),
+            "Should not contain Windows AppData/ProgramData paths on Unix; got: {:?}",
+            paths
+        );
+    }
+
+    /// On Windows: verify that %APPDATA% and %PROGRAMDATA% kernel paths are included
+    /// and that Unix /usr paths are absent.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn test_get_kernel_dirs_windows_paths() {
+        let dirs = get_kernel_dirs();
+        let paths: Vec<_> = dirs
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+
+        // Should not contain hardcoded Unix system paths
+        assert!(
+            !paths.iter().any(|p| p.starts_with("/usr")),
+            "Should not contain /usr paths on Windows; got: {:?}",
+            paths
+        );
+
+        // %APPDATA% or %PROGRAMDATA% should appear (they are always set on Windows)
+        assert!(
+            paths
+                .iter()
+                .any(|p| p.contains("AppData") || p.contains("ProgramData")),
+            "Should contain AppData or ProgramData Jupyter path on Windows; got: {:?}",
+            paths
+        );
     }
 }

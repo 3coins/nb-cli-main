@@ -7,4 +7,5 @@ pub mod output;
 pub mod read;
 pub mod search;
 pub mod self_cmd;
+pub mod skill;
 pub mod view;

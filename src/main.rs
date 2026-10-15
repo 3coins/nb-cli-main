@@ -49,6 +49,11 @@ enum Commands {
         #[command(subcommand)]
         command: commands::self_cmd::SelfCommands,
     },
+    /// Install the notebook-cli skill into your AI agent(s)
+    Skill {
+        #[command(subcommand)]
+        command: commands::skill::SkillCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -91,6 +96,7 @@ fn main() {
         Commands::Status(args) => commands::connection::status::execute(args),
         Commands::Disconnect(args) => commands::connection::disconnect::execute(args),
         Commands::SelfCmd { command } => commands::self_cmd::execute(command),
+        Commands::Skill { command } => commands::skill::execute(command),
     };
 
     if let Err(e) = result {

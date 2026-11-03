@@ -182,11 +182,9 @@ jobs:
     name: test connect (jupyter-collaboration)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # This job blocks: the 2 tests with a known, unrelated pre-existing issue
-    # (jupyter-ai-contrib/nb-cli#100, a read-after-write race in
-    # jupyter_server_ydoc's save debounce, not a PR #99-scoped regression) are
-    # marked #[ignore] in the test source rather than made non-blocking here,
-    # so the execute/restart tests this backend actually cares about gate CI.
+    # This job blocks: the execute/restart tests and the read-after-write
+    # persistence tests (output clear, cell add/update/delete; see
+    # jupyter-ai-contrib/nb-cli#100) all gate CI for this backend.
 
     steps:
     - uses: actions/checkout@v5

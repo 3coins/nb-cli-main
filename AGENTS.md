@@ -38,16 +38,18 @@ sessions, so tests must do this themselves).
 execute/restart tests (what PR #99 / issue #92 fixed — FileID fallback, `sessionId`
 on the Y.js room WS handshake, v1 kernel-WS subprotocol, client-side output
 writing) pass 10/10 runs with zero flakiness, and gate the `test-connect-collab`
-CI job. `test_clear_outputs_in_connect_mode` and
-`test_clear_outputs_specific_cell_in_connect_mode` are marked `#[ignore]`
-against jupyter-collaboration (issue #100): `nb output clear` correctly edits
-the Y.js room, but `jupyter_server_ydoc` only flushes the room to disk on a
-debounced ~1s timer (`document_save_delay`), so `nb read` immediately
-afterward races that debounce and can observe stale content — confirmed by
-direct measurement (still stale at +0.7s, cleared by +1.7s). This is a
-**different** root cause from #90 (JSD's clear never persists, permanently,
-because externalized output files get unconditionally re-materialized into
-the notebook on every save) — don't conflate the two if either gets fixed.
+CI job.
+
+`jupyter_server_ydoc` only flushes a room to disk on a debounced ~1s timer
+(`document_save_delay`), so a Contents API read right after a Y.js edit can
+see stale content (issue #100). Realtime cell add/update/delete and
+`nb output clear` therefore finish with `YDocClient::sync_and_persist()`,
+which sends the server's raw manual-save message and waits for its reply.
+A missing reply is a warning, since autosave still persists the edit. The
+clear-output and cell-edit persistence tests are scoped to
+jupyter-collaboration. JSD's clear never persisting (#90, externalized
+output files re-materialized on every save) is a **different** root cause —
+don't conflate the two.
 
 ## Remote mode and server base_url
 

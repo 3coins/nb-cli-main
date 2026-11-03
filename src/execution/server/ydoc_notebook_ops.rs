@@ -141,8 +141,8 @@ pub async fn ydoc_add_cells(
             .context("Failed to add cell to Y.js document")?;
     }
 
-    // Sync changes
-    ydoc_client.sync().await.context("Failed to sync changes")?;
+    // Sync changes and make sure they are on disk before returning
+    ydoc_client.sync_and_persist().await?;
 
     // Close connection
     ydoc_client.close().await?;
@@ -169,8 +169,8 @@ pub async fn ydoc_delete_cells(
     delete_cells_from_ydoc(ydoc_client.get_doc(), indices)
         .context("Failed to delete cells from Y.js document")?;
 
-    // Sync changes
-    ydoc_client.sync().await.context("Failed to sync changes")?;
+    // Sync changes and make sure they are on disk before returning
+    ydoc_client.sync_and_persist().await?;
 
     // Close connection
     ydoc_client.close().await?;
@@ -212,8 +212,8 @@ pub async fn ydoc_update_cell(
     update_cell_source_in_ydoc(ydoc_client.get_doc(), cell_index, new_source, append_source)
         .context("Failed to update cell in Y.js document")?;
 
-    // Sync changes
-    ydoc_client.sync().await.context("Failed to sync changes")?;
+    // Sync changes and make sure they are on disk before returning
+    ydoc_client.sync_and_persist().await?;
 
     // Close connection
     ydoc_client.close().await?;
@@ -284,13 +284,7 @@ pub async fn ydoc_clear_outputs(
     let cells_cleared = clear_outputs_in_ydoc(ydoc_client.get_doc(), selector)
         .context("Failed to clear outputs in Y.js document")?;
 
-    ydoc_client.sync().await.context("Failed to sync changes")?;
-    if !ydoc_client.server_writes_outputs() {
-        ydoc_client
-            .save_now()
-            .await
-            .context("Failed to persist cleared outputs")?;
-    }
+    ydoc_client.sync_and_persist().await?;
     ydoc_client.close().await?;
 
     Ok(cells_cleared)

@@ -112,6 +112,35 @@ fn decode_save_reply(data: &[u8], request_id: u32) -> Result<Option<String>> {
     Ok(Some(reply.status))
 }
 
+/// How long to wait for jupyter-server-ydoc to acknowledge a manual save.
+const SAVE_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Result of a manual save request.
+#[derive(Debug, PartialEq, Eq)]
+enum SaveOutcome {
+    /// The room was written to disk.
+    Saved,
+    /// The server skipped the save because the room was mid-load or
+    /// reconciling an out-of-band file change; autosave will follow.
+    Skipped,
+    /// No reply before [`SAVE_REPLY_TIMEOUT`]; the server may predate the
+    /// manual-save handler.
+    NoReply,
+}
+
+/// Map a save reply's `status` field to an outcome. `failed` (or anything
+/// unknown) is an error: the server tried to write and could not.
+fn save_outcome(status: &str) -> Result<SaveOutcome> {
+    match status {
+        "success" => Ok(SaveOutcome::Saved),
+        "skipped" => Ok(SaveOutcome::Skipped),
+        other => anyhow::bail!(
+            "jupyter-server-ydoc failed to save notebook (status: {})",
+            other
+        ),
+    }
+}
+
 /// Definitive signal that the server has no compatible Y.js backend: neither
 /// the FileID index endpoint (jupyter-server-documents) nor the collaboration
 /// session endpoint (jupyter-collaboration) is present. Callers route to the
@@ -646,15 +675,43 @@ impl YDocClient {
         Ok(())
     }
 
+    /// Push local changes to the server and, on jupyter-collaboration, ask the
+    /// room to write them to disk before returning.
+    ///
+    /// jupyter-collaboration only flushes a room to disk after a ~1s
+    /// inactivity delay, so a Contents API read right after a Y.js edit can see
+    /// stale content (issue #100). jupyter-server-documents owns persistence
+    /// itself and does not implement the manual-save message, so it only gets
+    /// the sync.
+    ///
+    /// The edit is already in the room once `sync` returns, and autosave will
+    /// persist it shortly. A missing acknowledgement (an older server without
+    /// the save handler, or a slow write) is therefore reported as a warning,
+    /// not an error. An explicit `failed` reply from the server is an error.
+    pub async fn sync_and_persist(&mut self) -> Result<()> {
+        self.sync().await.context("Failed to sync changes")?;
+        if self.server_writes_outputs() {
+            return Ok(());
+        }
+        match self.save_now().await? {
+            SaveOutcome::Saved | SaveOutcome::Skipped => {}
+            SaveOutcome::NoReply => eprintln!(
+                "Warning: server did not confirm the save within {}s; \
+                 changes will be written by autosave shortly",
+                SAVE_REPLY_TIMEOUT.as_secs()
+            ),
+        }
+        Ok(())
+    }
+
     /// Request an immediate disk flush from jupyter-collaboration.
     ///
     /// jupyter-collaboration persists room changes after an inactivity delay.
     /// Its raw WebSocket protocol provides a manual `save` message that skips
-    /// that delay and acknowledges the completed write. The
-    /// jupyter-server-documents backend owns persistence itself and does not
-    /// implement this message, so callers only use this method for the
-    /// collaboration path.
-    pub async fn save_now(&mut self) -> Result<()> {
+    /// that delay and acknowledges the completed write. Callers should go
+    /// through [`sync_and_persist`](Self::sync_and_persist), which only uses
+    /// this on the collaboration backend.
+    async fn save_now(&mut self) -> Result<SaveOutcome> {
         let request = encode_save_request(SAVE_REQUEST_ID);
         self.ws
             .send(Message::binary(request))
@@ -665,11 +722,14 @@ impl YDocClient {
             .await
             .context("Failed to flush immediate save request")?;
 
-        let deadline = std::time::Duration::from_secs(3);
+        // One deadline for the whole wait, so unrelated room traffic
+        // (awareness, other clients' updates) can't keep extending it.
+        let deadline = tokio::time::Instant::now() + SAVE_REPLY_TIMEOUT;
         loop {
-            let message = tokio::time::timeout(deadline, self.ws.next())
-                .await
-                .context("Timed out waiting for immediate notebook save")?
+            let Ok(next) = tokio::time::timeout_at(deadline, self.ws.next()).await else {
+                return Ok(SaveOutcome::NoReply);
+            };
+            let message = next
                 .ok_or_else(|| anyhow::anyhow!("Y.js WebSocket closed while saving notebook"))?
                 .context("Y.js WebSocket error while saving notebook")?;
 
@@ -681,13 +741,7 @@ impl YDocClient {
                 continue;
             };
 
-            match status.as_str() {
-                "success" | "skipped" => return Ok(()),
-                other => anyhow::bail!(
-                    "jupyter-server-ydoc failed to save notebook (status: {})",
-                    other
-                ),
-            }
+            return save_outcome(&status);
         }
     }
 
@@ -827,8 +881,8 @@ impl YDocClient {
 #[cfg(test)]
 mod fileid_classification_tests {
     use super::{
-        decode_save_reply, encode_save_request, is_yjs_unavailable, YDocClient, YjsUnavailable,
-        RAW_MESSAGE_TYPE,
+        decode_save_reply, encode_save_request, is_yjs_unavailable, save_outcome, SaveOutcome,
+        YDocClient, YjsUnavailable, RAW_MESSAGE_TYPE,
     };
     use anyhow::{anyhow, Context};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1109,6 +1163,14 @@ mod fileid_classification_tests {
             encode_save_request(7),
             vec![RAW_MESSAGE_TYPE, 4, b's', b'a', b'v', b'e', 7]
         );
+    }
+
+    #[test]
+    fn save_status_maps_to_outcome() {
+        assert_eq!(save_outcome("success").unwrap(), SaveOutcome::Saved);
+        assert_eq!(save_outcome("skipped").unwrap(), SaveOutcome::Skipped);
+        let err = save_outcome("failed").unwrap_err().to_string();
+        assert!(err.contains("status: failed"), "{err}");
     }
 
     #[test]

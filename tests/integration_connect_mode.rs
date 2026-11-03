@@ -990,6 +990,68 @@ fn test_clear_outputs_specific_cell_in_connect_mode() {
     );
 }
 
+/// Cell add, update and delete are visible to an immediate Contents API read.
+///
+/// Same read-after-write race as the clear tests above (issue #100): each
+/// realtime edit must be flushed to disk before the command returns, not left
+/// to jupyter-collaboration's autosave debounce.
+#[test]
+fn test_cell_edits_persist_immediately_in_connect_mode() {
+    if test_helpers::test_backend() != "jupyter-collaboration" {
+        eprintln!("⚠️  Skipping: cell-edit persistence test requires jupyter-collaboration");
+        return;
+    }
+    let Some(ctx) = TestCtx::new() else {
+        eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");
+        return;
+    };
+
+    let nb = "test_cell_edits_persist.ipynb";
+    ctx.copy_fixture("with_outputs.ipynb", nb);
+
+    let read_cells = || -> Vec<serde_json::Value> {
+        let result = ctx.run(&["read", nb, "--json"]).assert_success();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.stdout).expect("Failed to parse JSON output");
+        parsed["cells"].as_array().unwrap().clone()
+    };
+    let source_of = |cell: &serde_json::Value| -> String {
+        match &cell["source"] {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Array(lines) => lines
+                .iter()
+                .map(|l| l.as_str().unwrap_or_default())
+                .collect(),
+            other => panic!("unexpected source shape: {other:?}"),
+        }
+    };
+
+    let initial = read_cells().len();
+
+    ctx.run(&["cell", "add", nb, "--source", "added_cell = 1"])
+        .assert_success();
+    let cells = read_cells();
+    assert_eq!(cells.len(), initial + 1, "added cell should be on disk");
+    assert_eq!(source_of(cells.last().unwrap()), "added_cell = 1");
+
+    ctx.run(&[
+        "cell",
+        "update",
+        nb,
+        "--cell-index",
+        "-1",
+        "--source",
+        "updated_cell = 2",
+    ])
+    .assert_success();
+    let cells = read_cells();
+    assert_eq!(source_of(cells.last().unwrap()), "updated_cell = 2");
+
+    ctx.run(&["cell", "delete", nb, "--cell-index", "-1"])
+        .assert_success();
+    assert_eq!(read_cells().len(), initial, "deleted cell should be gone");
+}
+
 /// Error when clearing outputs for a non-existent cell ID.
 #[test]
 fn test_clear_outputs_invalid_cell_id_in_connect_mode() {
